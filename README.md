@@ -13,8 +13,11 @@ after install — each phone keeps its own profile and history.
 - Beginner vs. experienced modes gate out technical lifts; goal (fitness /
   muscle / strength) sets the rep ranges and rest periods.
 - Log weight and reps per set with a rest timer; the app remembers and suggests
-  **+5 lb** the next time you hit every rep target, shows warm-up ramp sets,
-  detects personal records, and suggests today's split from what you trained last.
+  **+5 lb** the next time you hit every rep target, auto-fills your working
+  weight across sets, shows warm-up ramp sets computed from the weight you
+  actually enter, detects personal records, and suggests today's split from
+  what you trained last.
+- Optional **cycle-aware mode** for those who want it (see the science note below).
 - Add exercises mid-workout (search the database or create custom ones — leg
   press, 5-min HIIT blocks, anything), or start a blank freestyle session.
 - History, weekly streaks, JSON backup export/import. Screen stays awake during
@@ -22,6 +25,30 @@ after install — each phone keeps its own profile and history.
 
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).
+
+## On the cycle-aware feature (and the science)
+
+Cycle tracking is **opt-in** and only appears for profiles set to female. When
+on, it predicts your cycle phase from logged period-start dates and shows it on
+the Today screen with a short, honest note. It also offers an **optional**
+"ease loads 10% during your period" toggle.
+
+Crucially, it **never blocks, hides, or forbids exercises by phase.** That's a
+deliberate, evidence-based choice. The popular idea that women shouldn't do
+strenuous training in a given phase isn't supported by the current literature:
+
+> McNulty et al. (2020), *Sports Medicine* — systematic review + network
+> meta-analysis of 78 studies — found menstrual cycle phase has only a **trivial**
+> average effect on strength/endurance performance (effect size ≈ −0.06), with
+> large between-person variation, and concluded that **general phase-based
+> guidelines can't be formed; a personalised, feel-based approach is
+> recommended.** (doi:10.1007/s40279-020-01319-3)
+
+A 2023 meta-analysis similarly found hormonal contraceptives don't meaningfully
+change strength/hypertrophy adaptations (doi:10.1007/s40279-023-01911-3). So the
+feature is built for **awareness and self-regulation** (training by feel, which
+is legitimate RPE-based practice), not rigid rules. If future evidence shifts,
+the phase notes in `app.js` (`PHASE_NOTE`, `CYCLE_SCIENCE`) are where to update.
 
 ## Run it locally (Mac)
 

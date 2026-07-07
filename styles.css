@@ -360,6 +360,30 @@ h2 { font-size: 17px; }
 }
 .sugg.up { background: var(--accent-soft); }
 
+/* ---------------- profile extras & cycle ---------------- */
+
+.two-col { display: flex; gap: 10px; }
+.two-col .field { flex: 1; min-width: 0; }
+
+.cycle { border-left: 3px solid var(--accent); }
+.cycle-head { display: flex; align-items: center; gap: 8px; }
+.cycle-head strong { font-family: var(--serif); font-size: 17px; }
+.cycle-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.cycle[data-phase="follicular"] .cycle-dot { background: #4a9d7f; }
+.cycle[data-phase="ovulation"] .cycle-dot { background: #e0a53c; }
+.cycle[data-phase="luteal"] .cycle-dot { background: #9b7bb5; }
+.cycle-ease {
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: var(--r-ctl);
+  padding: 8px 11px;
+}
+
 .howto summary {
   font-size: 12px;
   font-weight: 700;

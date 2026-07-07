@@ -11,13 +11,17 @@ const OLD_KEY = 'swolemates-v1';
 
 function defaultState() {
   return {
-    profile: null, // {name, level: 'beginner'|'experienced', goal, units: 'lb'|'kg'}
+    // profile: {name, level, goal, units, sex:'female'|'male'|'na', theme,
+    //           bodyweight:number|null, bodyfat:number|null}
+    profile: null,
     settings: { equipment: Object.fromEntries(EQUIPMENT.map(e => [e.id, true])) },
     history: [],   // finished workouts, newest first
     custom: [],    // user-created exercises
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
     sel: { groups: ['full'], minutes: 45 },
+    // optional cycle-aware mode (female profiles) — see cycle-science notes in README
+    cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], autoEase: false },
   };
 }
 
@@ -39,6 +43,7 @@ function loadState() {
         Object.fromEntries(EQUIPMENT.map(e => [e.id, true])),
         s.settings.equipment || {});
       s.custom = parsed.custom || [];
+      s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
       return s;
     }
   } catch (e) { /* corrupted storage falls through to a fresh state */ }
@@ -119,6 +124,82 @@ function weekStats() {
   return { count, streak, total: S.history.length };
 }
 
+/* ---------------- menstrual cycle (optional, evidence-based) ----------------
+   Grounded in McNulty et al. 2020 (Sports Med, network meta-analysis, 78 studies,
+   doi:10.1007/s40279-020-01319-3): cycle phase has only a TRIVIAL average effect
+   on strength/endurance performance, with large individual variation. So this
+   feature never restricts or hides exercises. It surfaces the phase for awareness
+   and offers OPTIONAL autoregulation (ease load when a session feels hard), which
+   is legitimate RPE-based practice. Luteal phase is anchored at ~14 days. */
+
+const DAY_MS = 86400000;
+
+function cycleOn() {
+  return S.profile && S.profile.sex === 'female' && S.cycle && S.cycle.enabled && S.cycle.starts.length;
+}
+
+function lastPeriodStart() {
+  if (!S.cycle.starts.length) return null;
+  return S.cycle.starts.slice().sort().pop();
+}
+
+/* day within the current predicted cycle (0 = first day of last logged period) */
+function cycleDay() {
+  const last = lastPeriodStart();
+  if (!last) return null;
+  const days = Math.floor((Date.now() - new Date(last + 'T00:00').getTime()) / DAY_MS);
+  if (days < 0) return null;
+  const len = Math.max(21, Math.min(40, S.cycle.avgLen || 28));
+  return days % len;
+}
+
+function cyclePhase() {
+  const d = cycleDay();
+  if (d == null) return null;
+  const len = Math.max(21, Math.min(40, S.cycle.avgLen || 28));
+  const pLen = Math.max(2, Math.min(10, S.cycle.periodLen || 5));
+  const ovul = Math.max(pLen + 1, len - 14); // luteal phase ~14 days
+  if (d < pLen) return { key: 'menstruation', label: 'Menstruation', day: d + 1 };
+  if (d < ovul - 1) return { key: 'follicular', label: 'Follicular phase', day: d + 1 };
+  if (d <= ovul + 1) return { key: 'ovulation', label: 'Ovulatory phase', day: d + 1 };
+  return { key: 'luteal', label: 'Luteal phase', day: d + 1 };
+}
+
+const PHASE_NOTE = {
+  menstruation: 'Train as usual if you feel up to it. Cramps or low energy? It’s fine to ease the load or pick lighter work — that’s listening to your body, not a rule.',
+  follicular: 'Many people feel strong through here — a good stretch to chase progression, if your body agrees.',
+  ovulation: 'Estrogen peaks around now and some feel at their strongest. Effects are individual, so go by how you feel.',
+  luteal: 'Some notice higher perceived effort premenstrually. If a session feels harder than the numbers say, trust that and dial it back.',
+};
+
+const CYCLE_SCIENCE = 'The best current evidence (McNulty et al., 2020, a meta-analysis of 78 studies) finds cycle phase has only a trivial average effect on strength and endurance, with big person-to-person variation. So Spotter never blocks exercises by phase — it shows where you are and lets you adjust by feel.';
+
+/* optional load easing — only when the user turns it on, only during menstruation */
+function cycleEaseFactor() {
+  if (!cycleOn() || !S.cycle.autoEase) return 1;
+  const p = cyclePhase();
+  return p && p.key === 'menstruation' ? 0.9 : 1;
+}
+
+function logPeriodStart(iso) {
+  const day = (iso || new Date().toISOString()).slice(0, 10);
+  if (!S.cycle.starts.includes(day)) {
+    S.cycle.starts.push(day);
+    S.cycle.starts.sort();
+    // refine average cycle length from the last few gaps
+    const st = S.cycle.starts;
+    if (st.length >= 2) {
+      const gaps = [];
+      for (let i = Math.max(1, st.length - 4); i < st.length; i++) {
+        gaps.push(Math.round((new Date(st[i]) - new Date(st[i - 1])) / DAY_MS));
+      }
+      const valid = gaps.filter(g => g >= 21 && g <= 40);
+      if (valid.length) S.cycle.avgLen = Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
+    }
+  }
+  save();
+}
+
 /* ---------------- exercise filtering & progression ---------------- */
 
 function equipOK(ex) {
@@ -146,6 +227,8 @@ function lastPerf(exId) {
 function suggestFor(ex) {
   const perf = lastPerf(ex.id);
   const step = incrFor(ex);
+  const ease = cycleEaseFactor();
+  const easeNote = ease < 1 ? ' · eased ' + Math.round((1 - ease) * 100) + '% for today' : '';
   if (!perf) {
     return { w: null, note: step ? 'First time: pick a weight that leaves 2–3 reps in the tank.' : null, up: false };
   }
@@ -154,12 +237,14 @@ function suggestFor(ex) {
     ? 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + (detail ? ' × ' + detail : '')
     : (detail ? 'Last: ' + detail + (ex.mode === 'time' ? ' sec' : ' reps') : null);
   if (perf.allHit && perf.topW && step) {
-    return { w: perf.topW + step, note: lastTxt + ' — every target hit. Today: ' + fmtW(perf.topW + step) + ' ' + unitLabel() + ' ↑', up: true };
+    const target = ease < 1 ? roundW((perf.topW + step) * ease) : perf.topW + step;
+    return { w: target, note: lastTxt + ' — every target hit. Today: ' + fmtW(target) + ' ' + unitLabel() + (ease < 1 ? easeNote : ' ↑'), up: ease >= 1 };
   }
   if (perf.allHit && !step) {
     return { w: null, note: lastTxt + ' — every target hit. Add ' + (ex.mode === 'time' ? '5–10 sec' : '1–2 reps') + ' ↑', up: true };
   }
-  return { w: perf.topW, note: lastTxt, up: false };
+  const w = ease < 1 && perf.topW ? roundW(perf.topW * ease) : perf.topW;
+  return { w, note: lastTxt + easeNote, up: false };
 }
 
 /* ---------------- workout generator ---------------- */
@@ -553,11 +638,21 @@ function viewOnboard() {
           <button data-v="strength">Strength</button>
         </div>
       </label>
+      <label class="field"><span>Sex</span>
+        <div class="seg seg3" id="ob-sex">
+          <button data-v="female">Female</button>
+          <button data-v="male">Male</button>
+          <button data-v="na" class="on">Prefer not to say</button>
+        </div>
+      </label>
       <label class="field"><span>Units</span>
         <div class="seg" id="ob-units">
           <button data-v="lb" class="on">lb</button>
           <button data-v="kg">kg</button>
         </div>
+      </label>
+      <label class="field"><span>Bodyweight — optional</span>
+        <input id="ob-bw" type="number" inputmode="decimal" placeholder="e.g. 150" min="0" autocomplete="off">
       </label>
       <label class="field"><span>Your look</span>
         ${swatchesHTML(S._obTheme || 'journal', 'ob-theme')}
@@ -600,6 +695,7 @@ function viewToday() {
       <p class="muted small">${st.count} session${st.count === 1 ? '' : 's'} this week${st.streak > 1 ? ' · ' + st.streak + '-week streak' : ''}</p></div>
     </header>
     ${resume}
+    ${cycleBanner()}
     <section class="card">
       <h2>Muscle groups</h2>
       <div class="chips">${chips}</div>
@@ -620,6 +716,24 @@ function groupLabels(ids) {
   if (ids.includes('freestyle')) return 'Freestyle';
   const labels = UI_GROUPS.filter(g => ids.includes(g.id)).map(g => g.label);
   return labels.length ? labels.join(' + ') : 'Session';
+}
+
+function cycleBanner() {
+  if (!cycleOn()) return '';
+  const p = cyclePhase();
+  if (!p) return '';
+  const ease = cycleEaseFactor();
+  return `
+    <section class="card cycle" data-phase="${p.key}">
+      <div class="cycle-head">
+        <span class="cycle-dot"></span>
+        <strong>${p.label}</strong>
+        <span class="muted small">day ${p.day}</span>
+      </div>
+      <p class="muted small">${esc(PHASE_NOTE[p.key])}</p>
+      ${ease < 1 ? '<p class="cycle-ease">Auto-ease is on — today’s suggested loads are trimmed 10%.</p>' : ''}
+      <details class="howto"><summary>The science</summary><p class="muted small" style="margin-top:8px">${esc(CYCLE_SCIENCE)}</p></details>
+    </section>`;
 }
 
 /* ----- preview ----- */
@@ -700,14 +814,17 @@ function firstWeightedIndex() {
   return S.active.ex.findIndex(e => e.mode !== 'time' && weightApplies(e));
 }
 
+function warmupInner(w) {
+  if (w) {
+    return '<strong>Warm-up sets</strong> · 8 × ' + fmtW(roundW(w * 0.5)) +
+      ' · 5 × ' + fmtW(roundW(w * 0.75)) + ' ' + unitLabel() + ', then working sets below';
+  }
+  return '<strong>Warm-up sets</strong> · two light ramp-up sets of 8 before the working sets';
+}
+
 function warmupSetsHTML(e, i) {
   if (i !== firstWeightedIndex()) return '';
-  const w = e.suggest && e.suggest.w;
-  if (w) {
-    return '<div class="warmup-line"><strong>Warm-up sets</strong> · 8 × ' + fmtW(roundW(w * 0.5)) +
-      ' · 5 × ' + fmtW(roundW(w * 0.75)) + ' ' + unitLabel() + ', then working sets below</div>';
-  }
-  return '<div class="warmup-line"><strong>Warm-up sets</strong> · two light ramp-up sets of 8 before the working sets</div>';
+  return '<div class="warmup-line">' + warmupInner(e.suggest && e.suggest.w) + '</div>';
 }
 
 function exerciseCard(e, i) {
@@ -766,6 +883,30 @@ function howtoHTML(id) {
 function weightApplies(e) {
   const orig = findEx(e.id);
   return orig ? orig.incr > 0 : true;
+}
+
+/* When you set a weight, carry it forward to later sets you haven't filled yet. */
+function autofillWeight(i, j) {
+  const ex = S.active.ex[i];
+  const w = ex.log[j].w;
+  for (let k = j + 1; k < ex.log.length; k++) {
+    const later = ex.log[k];
+    if (!later.done && (later.w == null || later.w === '')) {
+      later.w = w;
+      const input = document.querySelector('#set-' + i + '-' + k + ' [data-f="w"]');
+      if (input && document.activeElement !== input) input.value = w;
+    }
+  }
+}
+
+/* Recompute the warm-up ramp from the working weight the user actually entered. */
+function refreshWarmup(i) {
+  const line = document.querySelector('#ex-' + i + ' .warmup-line');
+  if (!line) return;
+  const ex = S.active.ex[i];
+  const entered = ex.log.map(s => s.w).filter(w => typeof w === 'number' && w > 0);
+  const work = entered.length ? Math.max(...entered) : (ex.suggest && ex.suggest.w);
+  line.innerHTML = warmupInner(work);
 }
 
 /* Update just the touched row + header, so inputs elsewhere keep focus/state */
@@ -958,16 +1099,32 @@ function viewProfile() {
           <button data-v="strength" class="${p.goal === 'strength' ? 'on' : ''}">Strength</button>
         </div>
       </label>
+      <label class="field"><span>Sex</span>
+        <div class="seg seg3" data-set="sex">
+          <button data-v="female" class="${p.sex === 'female' ? 'on' : ''}">Female</button>
+          <button data-v="male" class="${p.sex === 'male' ? 'on' : ''}">Male</button>
+          <button data-v="na" class="${(!p.sex || p.sex === 'na') ? 'on' : ''}">N/A</button>
+        </div>
+      </label>
       <label class="field"><span>Units</span>
         <div class="seg" data-set="units">
           <button data-v="lb" class="${p.units === 'lb' ? 'on' : ''}">lb</button>
           <button data-v="kg" class="${p.units === 'kg' ? 'on' : ''}">kg</button>
         </div>
       </label>
+      <div class="two-col">
+        <label class="field"><span>Bodyweight (${unitLabel()})</span>
+          <input type="number" inputmode="decimal" data-f="bodyweight" value="${p.bodyweight != null ? p.bodyweight : ''}" placeholder="—" min="0">
+        </label>
+        <label class="field"><span>Body fat % — optional</span>
+          <input type="number" inputmode="decimal" data-f="bodyfat" value="${p.bodyfat != null ? p.bodyfat : ''}" placeholder="—" min="0" max="70">
+        </label>
+      </div>
       <label class="field"><span>Look — each phone keeps its own</span>
         ${swatchesHTML(p.theme || 'journal', 'set-theme')}
       </label>
     </section>
+    ${cycleSettings()}
     <section class="card">
       <h2>Gym equipment</h2>
       <p class="muted small">Turn off anything your gym doesn't have and plans will route around it.</p>
@@ -988,6 +1145,41 @@ function viewProfile() {
   ${tabbar('profile')}`;
 }
 
+function cycleSettings() {
+  const p = S.profile;
+  if (p.sex !== 'female') return '';
+  const c = S.cycle;
+  const phase = cycleOn() ? cyclePhase() : null;
+  const last = lastPeriodStart();
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+  <section class="card">
+    <h2>Cycle-aware training</h2>
+    <p class="muted small">Optional. Tracks your cycle and shows the phase so you can train by feel. It never blocks exercises — the evidence says phase effects on performance are small and very individual.</p>
+    <label class="switch-row"><span>Enable cycle tracking</span>
+      <input type="checkbox" data-f="cycle-enabled" ${c.enabled ? 'checked' : ''}><i></i>
+    </label>
+    ${c.enabled ? `
+      <div class="two-col mt">
+        <label class="field"><span>Avg cycle length</span>
+          <input type="number" inputmode="numeric" data-f="cycle-avg" value="${c.avgLen}" min="21" max="40">
+        </label>
+        <label class="field"><span>Period length</span>
+          <input type="number" inputmode="numeric" data-f="cycle-period" value="${c.periodLen}" min="2" max="10">
+        </label>
+      </div>
+      <label class="field mt"><span>Log a period start date</span>
+        <input type="date" data-f="cycle-date" max="${today}" value="${today}">
+      </label>
+      <button class="btn-ghost" data-a="log-period">Log period start</button>
+      ${last ? '<p class="muted small">Last logged: ' + esc(fmtDate(last + 'T00:00')) + (phase ? ' · currently <strong>' + esc(phase.label.toLowerCase()) + '</strong>, day ' + phase.day : '') + ' · ' + c.starts.length + ' logged</p>' : '<p class="muted small">No periods logged yet — add one to start predictions.</p>'}
+      <label class="switch-row"><span>Auto-ease loads 10% during your period<br><span class="muted small">Suggestions only — you can always override</span></span>
+        <input type="checkbox" data-f="cycle-ease" ${c.autoEase ? 'checked' : ''}><i></i>
+      </label>
+    ` : ''}
+  </section>`;
+}
+
 function dumbbellSVG() {
   return '<svg class="db" viewBox="0 0 24 24"><path d="M1.5 10h2v4h-2zM20.5 10h2v4h-2zM4.5 8h2.5v8H4.5zM17 8h2.5v8H17zM7.5 11h9v2h-9z"/></svg>';
 }
@@ -1005,6 +1197,7 @@ document.addEventListener('click', ev => {
       const key = seg.dataset.set, val = segBtn.dataset.v;
       if (key === 'units' && S.profile.units !== val) convertUnits(val);
       S.profile[key] = val; save();
+      if (key === 'sex') render(); // reveal/hide the cycle section
     }
     return;
   }
@@ -1035,6 +1228,13 @@ document.addEventListener('click', ev => {
     S.draft = generateWorkout(S.sel.groups, S.sel.minutes);
     if (!S.draft.ex.length) { toast('Nothing matches — check equipment settings in Profile.'); return; }
     save(); go('preview');
+  }
+
+  else if (a === 'log-period') {
+    const input = document.querySelector('[data-f="cycle-date"]');
+    logPeriodStart(input ? input.value + 'T00:00:00.000Z' : null);
+    toast('Period start logged.');
+    render();
   }
 
   else if (a === 'freestyle') startFreestyle();
@@ -1096,11 +1296,15 @@ document.addEventListener('click', ev => {
 
   else if (a === 'ob-start') {
     const name = $('#ob-name').value.trim();
+    const bw = parseFloat($('#ob-bw').value);
     S.profile = {
       name,
       level: $('#ob-level .on').dataset.v,
       goal: $('#ob-goal .on').dataset.v,
+      sex: $('#ob-sex .on').dataset.v,
       units: $('#ob-units .on').dataset.v,
+      bodyweight: bw > 0 ? bw : null,
+      bodyfat: null,
       theme: S._obTheme || 'journal',
     };
     delete S._obTheme;
@@ -1142,12 +1346,32 @@ document.addEventListener('input', ev => {
   const f = el.dataset.f;
   if (!f) return;
   if (f === 'w' || f === 'r') {
-    const s = S.active && S.active.ex[+el.dataset.i] && S.active.ex[+el.dataset.i].log[+el.dataset.j];
-    if (s) { s[f] = el.value === '' ? null : +el.value; save(); }
+    const i = +el.dataset.i, j = +el.dataset.j;
+    const ex = S.active && S.active.ex[i];
+    const s = ex && ex.log[j];
+    if (s) {
+      s[f] = el.value === '' ? null : +el.value;
+      if (f === 'w' && s.w != null) autofillWeight(i, j);
+      if (f === 'w' && i === firstWeightedIndex()) refreshWarmup(i);
+      save();
+    }
   } else if (f === 'name') {
     S.profile.name = el.value.trim(); save();
   } else if (f === 'eq') {
     S.settings.equipment[el.dataset.id] = el.checked; save();
+  } else if (f === 'bodyweight' || f === 'bodyfat') {
+    const v = parseFloat(el.value);
+    S.profile[f] = el.value === '' || !(v >= 0) ? null : v; save();
+  } else if (f === 'cycle-enabled') {
+    S.cycle.enabled = el.checked; save(); render();
+  } else if (f === 'cycle-ease') {
+    S.cycle.autoEase = el.checked; save();
+  } else if (f === 'cycle-avg') {
+    const v = parseInt(el.value, 10);
+    if (v >= 21 && v <= 40) { S.cycle.avgLen = v; save(); }
+  } else if (f === 'cycle-period') {
+    const v = parseInt(el.value, 10);
+    if (v >= 2 && v <= 10) { S.cycle.periodLen = v; save(); }
   }
 });
 
