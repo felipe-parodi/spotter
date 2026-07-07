@@ -17,6 +17,7 @@ function defaultState() {
     settings: { equipment: Object.fromEntries(EQUIPMENT.map(e => [e.id, true])) },
     history: [],   // finished workouts, newest first
     custom: [],    // user-created exercises
+    bodyLog: [],   // bodyweight entries: {date: ISO, w: number}
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
     sel: { groups: ['full'], minutes: 45 },
@@ -44,6 +45,11 @@ function loadState() {
         s.settings.equipment || {});
       s.custom = parsed.custom || [];
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
+      s.bodyLog = parsed.bodyLog || [];
+      // seed the log from an existing single bodyweight so the trend has a start point
+      if (!s.bodyLog.length && s.profile && s.profile.bodyweight > 0) {
+        s.bodyLog = [{ date: new Date().toISOString(), w: s.profile.bodyweight }];
+      }
       return s;
     }
   } catch (e) { /* corrupted storage falls through to a fresh state */ }
@@ -152,6 +158,28 @@ function loggedExercises() {
     }
   }
   return Array.from(seen.values()).sort((a, b) => b.last - a.last);
+}
+
+/* ---------------- bodyweight log ---------------- */
+
+/* Upsert today's bodyweight entry and keep profile.bodyweight in sync. */
+function logBodyweight(w) {
+  if (!(w > 0)) return;
+  if (!S.bodyLog) S.bodyLog = [];
+  const d = new Date().toISOString().slice(0, 10);
+  const existing = S.bodyLog.find(e => e.date.slice(0, 10) === d);
+  if (existing) existing.w = w;
+  else S.bodyLog.push({ date: new Date().toISOString(), w });
+  S.bodyLog.sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (S.profile) S.profile.bodyweight = w;
+  save();
+}
+
+/* Chart-ready series, oldest → newest. */
+function bodySeries() {
+  return (S.bodyLog || []).slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map(e => ({ t: new Date(e.date).getTime(), date: e.date, val: e.w, sub: fmtW(e.w) + ' ' + unitLabel(), weighted: true }));
 }
 
 /* Build an SVG path + points for a series of numeric values (equal x-spacing). */
@@ -759,7 +787,7 @@ function render() {
   const views = {
     onboard: viewOnboard, today: viewToday, preview: viewPreview,
     workout: viewWorkout, summary: viewSummary, history: viewHistory,
-    trends: viewTrends, trend: viewTrend, profile: viewProfile,
+    trends: viewTrends, trend: viewTrend, bw: viewBodyweight, profile: viewProfile,
   };
   app.innerHTML = (views[route] || viewToday)();
 }
@@ -771,7 +799,7 @@ function tabbar(current) {
     ['trends', 'Trends', '<svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8v4h2V4h-8v2h4l-6.5 6.5-4-4L2 15.5z"/></svg>'],
     ['profile', 'Profile', '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5z"/></svg>'],
   ];
-  const map = { trend: 'trends' };
+  const map = { trend: 'trends', bw: 'trends' };
   const cur = map[current] || current;
   return '<nav class="tabbar">' + tabs.map(([id, label, icon]) =>
     '<button class="tab' + (cur === id ? ' on' : '') + '" data-a="nav" data-r="' + id + '">' + icon + '<span>' + label + '</span></button>'
@@ -1335,9 +1363,33 @@ function viewTrends() {
   return `
   <div class="screen">
     <header class="top"><div><div class="kicker">Your progress</div><h1>Trends</h1></div></header>
-    ${rows || '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>'}
+    ${bodyweightRow()}
+    ${rows || (S.bodyLog && S.bodyLog.length ? '' : '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>')}
   </div>
   ${tabbar('trends')}`;
+}
+
+function bodyweightRow() {
+  const s = bodySeries();
+  const latest = s[s.length - 1];
+  let right = '<span class="chev">›</span>';
+  let sub = 'Tap to log your weight';
+  if (latest) {
+    sub = fmtW(latest.val) + ' ' + unitLabel();
+    if (s.length >= 2) {
+      const d = latest.val - s[0].val;
+      sub += ' · ' + (d === 0 ? 'steady' : (d > 0 ? '+' : '−') + fmtW(Math.abs(d)) + ' ' + unitLabel() + ' overall');
+      right = sparkSVG(s.map(p => p.val));
+    }
+  }
+  return `
+    <button class="card trend-row bw-row" data-a="open-bw">
+      <div class="trend-main">
+        <strong>Bodyweight</strong>
+        <span class="muted small">${sub}</span>
+      </div>
+      ${right}
+    </button>`;
 }
 
 function viewTrend() {
@@ -1378,7 +1430,44 @@ function viewTrend() {
   ${tabbar('trends')}`;
 }
 
-/* ----- profile ----- */
+function viewBodyweight() {
+  const s = bodySeries();
+  const latest = s[s.length - 1];
+  const change = s.length >= 2 ? latest.val - s[0].val : null;
+  const recent = s.slice(-8).reverse().map(p =>
+    '<div class="hist-ex"><span class="muted">' + fmtDate(p.date) + '</span>' +
+    '<span>' + fmtW(p.val) + ' ' + unitLabel() +
+    '<button class="icon-btn sm bw-x" data-a="bw-del" data-date="' + esc(p.date) + '" title="Remove">✕</button></span></div>').join('');
+  const prefill = latest ? fmtW(latest.val) : '';
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="trends">‹</button>
+      <div><div class="kicker">Trend</div><h1>Bodyweight</h1></div>
+    </header>
+    ${s.length ? `
+      <section class="card chart-card">
+        <div class="chart-cap"><span class="muted small">Bodyweight (${unitLabel()})</span></div>
+        ${bigChartSVG(s)}
+      </section>
+      <div class="stats-row">
+        <div class="stat"><strong>${latest ? fmtW(latest.val) : '—'}</strong><span>current</span></div>
+        <div class="stat"><strong>${change == null ? '—' : (change > 0 ? '+' : change < 0 ? '−' : '') + fmtW(Math.abs(change))}</strong><span>change</span></div>
+        <div class="stat"><strong>${s.length}</strong><span>entries</span></div>
+      </div>` : '<p class="fine">Log your weight to start a trend. Weigh in at a consistent time — mornings are most reliable.</p>'}
+    <section class="card">
+      <h2>Log today</h2>
+      <div class="bw-entry">
+        <input type="number" inputmode="decimal" step="0.1" min="0" id="bw-input" value="${prefill}" placeholder="—">
+        <span class="bw-unit">${unitLabel()}</span>
+        <button class="btn-primary" data-a="bw-log">Save</button>
+      </div>
+      <p class="muted small">Updating today just replaces today's entry — weigh in as often as you like.</p>
+    </section>
+    ${recent ? '<section class="card"><h2>Recent</h2><div class="hist-detail" style="border:none;padding-top:2px">' + recent + '</div></section>' : ''}
+  </div>
+  ${tabbar('trends')}`;
+}
 
 /* ----- profile ----- */
 
@@ -1635,6 +1724,20 @@ document.addEventListener('click', ev => {
   }
 
   else if (a === 'open-trend') { S._trendEx = el.dataset.id; go('trend'); }
+  else if (a === 'open-bw') go('bw');
+
+  else if (a === 'bw-log') {
+    const v = parseFloat($('#bw-input').value);
+    if (v > 0) { logBodyweight(v); toast('Weight logged.'); render(); }
+    else toast('Enter a weight first.');
+  }
+
+  else if (a === 'bw-del') {
+    const d = el.dataset.date;
+    S.bodyLog = (S.bodyLog || []).filter(e => e.date !== d);
+    if (S.bodyLog.length) S.profile.bodyweight = S.bodyLog[S.bodyLog.length - 1].w;
+    save(); render();
+  }
 
   else if (a === 'ob-start') {
     const name = $('#ob-name').value.trim();
@@ -1648,7 +1751,9 @@ document.addEventListener('click', ev => {
       bodyweight: bw > 0 ? bw : null,
       bodyfat: null,
     };
-    save(); go('today');
+    save();
+    if (bw > 0) logBodyweight(bw); // seed the bodyweight trend
+    go('today');
   }
 
   else if (a === 'export' || a === 'backup-now') { exportData(); if (a === 'backup-now') { toast('Saved. Choose “Save to Files” to keep it in iCloud.'); render(); } }
@@ -1709,9 +1814,13 @@ document.addEventListener('input', ev => {
     S.profile.name = el.value.trim(); save();
   } else if (f === 'eq') {
     S.settings.equipment[el.dataset.id] = el.checked; save();
-  } else if (f === 'bodyweight' || f === 'bodyfat') {
+  } else if (f === 'bodyweight') {
     const v = parseFloat(el.value);
-    S.profile[f] = el.value === '' || !(v >= 0) ? null : v; save();
+    if (v > 0) logBodyweight(v); // keeps profile + today's log entry in sync
+    else { S.profile.bodyweight = null; save(); }
+  } else if (f === 'bodyfat') {
+    const v = parseFloat(el.value);
+    S.profile.bodyfat = el.value === '' || !(v >= 0) ? null : v; save();
   } else if (f === 'cycle-enabled') {
     S.cycle.enabled = el.checked; save(); render();
   } else if (f === 'cycle-avg') {
@@ -1733,6 +1842,8 @@ function convertUnits(to) {
     (e.log || []).forEach(s => { s.w = conv(s.w); });
     if (e.suggest && typeof e.suggest.w === 'number') e.suggest.w = conv(e.suggest.w);
   });
+  (S.bodyLog || []).forEach(e => { e.w = conv(e.w); });
+  if (S.profile && typeof S.profile.bodyweight === 'number') S.profile.bodyweight = conv(S.profile.bodyweight);
   toast('Weights converted to ' + to + '.');
 }
 
