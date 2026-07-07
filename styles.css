@@ -642,6 +642,53 @@ h2 { font-size: 17px; }
 .hist-ex { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
 .hist-ex .muted { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+.hist-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 6px; }
+.linkbtn.danger { color: var(--danger, #dc2626); }
+.btn-primary.sm { padding: 8px 18px; font-size: 11px; }
+.icon-btn.sm { width: 30px; height: 30px; font-size: 13px; }
+
+.edit-ex { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.edit-ex:last-of-type { border-bottom: none; }
+.edit-ex > strong { font-family: var(--serif); font-size: 15px; }
+.edit-set { display: flex; align-items: center; gap: 8px; }
+.edit-set .set-n { padding-left: 0; min-width: 16px; }
+.edit-set input {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  padding: 8px; text-align: center; font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums; outline: none;
+  -moz-appearance: textfield; appearance: textfield;
+}
+.edit-set input::-webkit-outer-spin-button, .edit-set input::-webkit-inner-spin-button { -webkit-appearance: none; }
+.edit-set input:focus { border-color: var(--ink); }
+.edit-set .times, .edit-set .bw { color: var(--muted); font-size: 13px; font-weight: 700; }
+
+/* ---------------- trends ---------------- */
+
+.trend-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
+.trend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.trend-main strong { font-family: var(--serif); font-size: 16px; }
+.trend-delta { font-weight: 700; font-variant-numeric: tabular-nums; }
+.trend-delta.up { color: var(--accent); }
+.trend-delta.down { color: var(--muted); }
+.spark { width: 96px; height: 34px; flex-shrink: 0; }
+
+.chart-card { gap: 6px; }
+.chart-cap { display: flex; justify-content: space-between; align-items: baseline; }
+.bigchart { width: 100%; height: auto; display: block; overflow: visible; }
+.bigchart .c-lbl { font-size: 11px; font-weight: 800; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.bigchart .c-lbl.hi { fill: var(--accent); }
+.bigchart .c-ax { font-size: 9.5px; font-weight: 700; fill: var(--muted); letter-spacing: 0.04em; }
+.chart-empty { padding: 24px 8px; text-align: center; color: var(--muted); font-size: 14px; }
+
+/* ---------------- backup nudge ---------------- */
+
+.backup { border-left: 3px solid var(--accent); gap: 12px; }
+.backup-txt { display: flex; flex-direction: column; gap: 2px; }
+.backup-txt strong { font-family: var(--serif); font-size: 16px; }
+.backup .row-btns .btn-ghost { flex: 1; }
+.backup .row-btns .btn-primary { flex: 1; }
+
 /* ---------------- profile ---------------- */
 
 .switch-row {

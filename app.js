@@ -124,6 +124,116 @@ function weekStats() {
   return { count, streak, total: S.history.length };
 }
 
+/* ---------------- per-exercise trends ---------------- */
+
+function epley1rm(w, r) { return w * (1 + Math.min(r, 12) / 30); }
+
+/* One data point per session that included the exercise, oldest → newest. */
+function exerciseSeries(id) {
+  const pts = [];
+  for (let k = S.history.length - 1; k >= 0; k--) {
+    const w = S.history[k];
+    const e = (w.exercises || []).find(x => x.id === id && x.sets && x.sets.length);
+    if (!e) continue;
+    const weighted = e.sets.some(s => typeof s.w === 'number' && s.w > 0);
+    let val, sub, est = 0;
+    if (weighted) {
+      const top = Math.max(...e.sets.map(s => s.w || 0));
+      const topSet = e.sets.filter(s => (s.w || 0) === top).sort((a, b) => (b.r || 0) - (a.r || 0))[0];
+      val = top; sub = fmtW(top) + ' × ' + (topSet.r || '?');
+      est = Math.max(...e.sets.map(s => epley1rm(s.w || 0, s.r || 0)));
+    } else {
+      val = Math.max(...e.sets.map(s => s.r || 0));
+      sub = val + (e.mode === 'time' ? ' sec' : ' reps');
+    }
+    const vol = e.sets.reduce((x, s) => x + (s.w || 0) * (s.r || 0), 0);
+    pts.push({ t: new Date(w.date).getTime(), date: w.date, val, sub, est, vol, weighted, mode: e.mode });
+  }
+  return pts;
+}
+
+/* Exercises you've logged, most-recent first, each with its series. */
+function loggedExercises() {
+  const seen = new Map();
+  for (const w of S.history) {
+    for (const e of (w.exercises || [])) {
+      if (!e.sets || !e.sets.length) continue;
+      if (!seen.has(e.id)) seen.set(e.id, { id: e.id, name: e.name, mode: e.mode, sessions: 0, last: 0 });
+      const rec = seen.get(e.id);
+      rec.sessions++;
+      rec.last = Math.max(rec.last, new Date(w.date).getTime());
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => b.last - a.last);
+}
+
+/* Build an SVG path + points for a series of numeric values (equal x-spacing). */
+function chartGeom(vals, w, h, pad) {
+  const n = vals.length;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = max - min || 1;
+  const innerW = w - pad.l - pad.r, innerH = h - pad.t - pad.b;
+  const x = i => n === 1 ? pad.l + innerW / 2 : pad.l + (i / (n - 1)) * innerW;
+  const y = v => pad.t + innerH - ((v - min) / span) * innerH;
+  const pts = vals.map((v, i) => ({ x: x(i), y: y(v) }));
+  return { pts, min, max, x, y, innerH, pad, w, h };
+}
+
+function smoothPath(pts) {
+  if (pts.length < 2) return pts.length ? `M${pts[0].x} ${pts[0].y}` : '';
+  let d = `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const p0 = pts[i - 1], p1 = pts[i];
+    const cx = (p0.x + p1.x) / 2;
+    d += ` C${cx.toFixed(1)} ${p0.y.toFixed(1)}, ${cx.toFixed(1)} ${p1.y.toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+  }
+  return d;
+}
+
+function sparkSVG(vals) {
+  if (vals.length < 2) return '';
+  const W = 96, H = 34, pad = { l: 2, r: 2, t: 4, b: 4 };
+  const g = chartGeom(vals, W, H, pad);
+  const line = smoothPath(g.pts);
+  const last = g.pts[g.pts.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="2.5" fill="var(--accent)"/>
+  </svg>`;
+}
+
+function bigChartSVG(series) {
+  const vals = series.map(p => p.val);
+  if (vals.length < 2) return '<div class="chart-empty">One session so far — log this exercise again to see the trend line.</div>';
+  const W = 320, H = 168, pad = { l: 8, r: 8, t: 16, b: 26 };
+  const g = chartGeom(vals, W, H, pad);
+  const line = smoothPath(g.pts);
+  const area = line + ` L${g.pts[g.pts.length - 1].x.toFixed(1)} ${(H - pad.b).toFixed(1)} L${g.pts[0].x.toFixed(1)} ${(H - pad.b).toFixed(1)} Z`;
+  const dots = g.pts.map((p, i) =>
+    `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${i === g.pts.length - 1 ? 4 : 2.5}" fill="var(--accent)"/>`).join('');
+  const maxI = vals.indexOf(g.max), minI = vals.indexOf(g.min);
+  const label = (i, v, cls) => {
+    const p = g.pts[i];
+    const above = p.y > pad.t + 18;
+    return `<text class="c-lbl ${cls}" x="${p.x.toFixed(1)}" y="${(above ? p.y - 7 : p.y + 14).toFixed(1)}" text-anchor="middle">${fmtW(v)}</text>`;
+  };
+  const d0 = new Date(series[0].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const d1 = new Date(series[series.length - 1].date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `<svg class="bigchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">
+    <defs><linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${area}" fill="url(#cg)"/>
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+    ${maxI !== minI ? label(maxI, g.max, 'hi') : ''}
+    ${label(g.pts.length - 1, vals[vals.length - 1], 'last')}
+    <text class="c-ax" x="${pad.l}" y="${H - 8}" text-anchor="start">${d0}</text>
+    <text class="c-ax" x="${W - pad.r}" y="${H - 8}" text-anchor="end">${d1}</text>
+  </svg>`;
+}
+
 /* ---------------- menstrual cycle (optional, evidence-based) ----------------
    Grounded in McNulty et al. 2020 (Sports Med, network meta-analysis, 78 studies,
    doi:10.1007/s40279-020-01319-3): cycle phase has only a TRIVIAL average effect
@@ -516,6 +626,19 @@ function computePRs(entry) {
   return prs;
 }
 
+/* Recompute a history entry's derived totals after an edit. Drops the PR badge,
+   since a corrected past session shouldn't retroactively claim a record. */
+function recomputeEntry(i) {
+  const w = S.history[i];
+  if (!w) return;
+  w.exercises = (w.exercises || []).filter(e => e.sets && e.sets.length);
+  if (!w.exercises.length) { S.history.splice(i, 1); save(); return; }
+  w.volume = w.exercises.reduce((v, e) => v + e.sets.reduce((x, s) => x + (s.w || 0) * (s.r || 0), 0), 0);
+  w.setCount = w.exercises.reduce((n, e) => n + e.sets.length, 0);
+  w.prs = [];
+  save();
+}
+
 function finishWorkout(force) {
   const a = S.active;
   const doneSets = a.ex.reduce((n, e) => n + e.log.filter(s => s.done).length, 0);
@@ -648,7 +771,8 @@ function render() {
   const app = $('#app');
   const views = {
     onboard: viewOnboard, today: viewToday, preview: viewPreview,
-    workout: viewWorkout, summary: viewSummary, history: viewHistory, profile: viewProfile,
+    workout: viewWorkout, summary: viewSummary, history: viewHistory,
+    trends: viewTrends, trend: viewTrend, profile: viewProfile,
   };
   app.innerHTML = (views[route] || viewToday)();
 }
@@ -657,10 +781,13 @@ function tabbar(current) {
   const tabs = [
     ['today', 'Today', '<svg viewBox="0 0 24 24"><path d="M4 10h3v7H4zM17 10h3v7h-3zM8.5 8h2v11h-2zM13.5 8h2v11h-2zM11 12.5h2v2h-2z"/></svg>'],
     ['history', 'Log', '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 1-8.5 6h2.2A7 7 0 1 0 12 5v3L7 4.5 12 1z"/><path d="M11 8h2v5h4v2h-6z"/></svg>'],
+    ['trends', 'Trends', '<svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8v4h2V4h-8v2h4l-6.5 6.5-4-4L2 15.5z"/></svg>'],
     ['profile', 'Profile', '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5z"/></svg>'],
   ];
+  const map = { trend: 'trends' };
+  const cur = map[current] || current;
   return '<nav class="tabbar">' + tabs.map(([id, label, icon]) =>
-    '<button class="tab' + (current === id ? ' on' : '') + '" data-a="nav" data-r="' + id + '">' + icon + '<span>' + label + '</span></button>'
+    '<button class="tab' + (cur === id ? ' on' : '') + '" data-a="nav" data-r="' + id + '">' + icon + '<span>' + label + '</span></button>'
   ).join('') + '</nav>';
 }
 
@@ -756,6 +883,7 @@ function viewToday() {
       <p class="muted small">${st.count} session${st.count === 1 ? '' : 's'} this week${st.streak > 1 ? ' · ' + st.streak + '-week streak' : ''}</p></div>
     </header>
     ${resume}
+    ${backupBanner()}
     ${cycleBanner()}
     ${checkinCard()}
     <section class="card">
@@ -794,6 +922,22 @@ function cycleBanner() {
       </div>
       <p class="muted small">${esc(PHASE_NOTE[p.key])}</p>
       <details class="howto"><summary>How this works</summary><p class="muted small" style="margin-top:8px">${esc(CYCLE_SCIENCE)}</p></details>
+    </section>`;
+}
+
+function backupBanner() {
+  const n = backupDue();
+  if (!n) return '';
+  return `
+    <section class="card backup">
+      <div class="backup-txt">
+        <strong>Back up your log</strong>
+        <span class="muted small">${n} session${n === 1 ? '' : 's'} saved only on this phone. On iPhone, tap Back up → Save to Files (iCloud).</span>
+      </div>
+      <div class="row-btns">
+        <button class="btn-ghost" data-a="snooze-backup">Later</button>
+        <button class="btn-primary" data-a="backup-now">Back up</button>
+      </div>
     </section>`;
 }
 
@@ -1130,19 +1274,39 @@ function viewSummary() {
 
 /* ----- history ----- */
 
+function volTxt(v) { return v >= 10000 ? (v / 1000).toFixed(1) + 'k' : Math.round(v); }
+
 function viewHistory() {
   const st = weekStats();
   const items = S.history.map((w, i) => {
     const open = S._openHist === i;
-    const detail = !open ? '' : '<div class="hist-detail">' + w.exercises.map(e =>
-      '<div class="hist-ex"><span>' + esc(e.name) + '</span><span class="muted">' +
-      e.sets.map(s => (s.w ? fmtW(s.w) + '×' : '') + (s.r || '?')).join('  ') + '</span></div>'
-    ).join('') + '</div>';
+    const editing = S._editHist === i;
+    let detail = '';
+    if (open && !editing) {
+      detail = '<div class="hist-detail">' + w.exercises.map(e =>
+        '<div class="hist-ex"><span>' + esc(e.name) + '</span><span class="muted">' +
+        e.sets.map(s => (s.w ? fmtW(s.w) + '×' : '') + (s.r || '?')).join('  ') + '</span></div>'
+      ).join('') +
+      '<div class="hist-actions"><button class="linkbtn" data-a="hist-edit" data-i="' + i + '">Edit</button>' +
+      '<button class="linkbtn danger" data-a="hist-del" data-i="' + i + '">Delete session</button></div></div>';
+    } else if (editing) {
+      detail = '<div class="hist-detail" data-stop>' + w.exercises.map((e, ei) =>
+        '<div class="edit-ex"><strong>' + esc(e.name) + '</strong>' +
+        e.sets.map((s, si) =>
+          '<div class="edit-set"><span class="set-n">' + (si + 1) + '</span>' +
+          (typeof s.w === 'number' ? '<input type="number" inputmode="decimal" step="0.5" data-f="hw" data-i="' + i + '" data-e="' + ei + '" data-s="' + si + '" value="' + s.w + '"><span class="times">×</span>' : '<span class="bw">BW ×</span>') +
+          '<input type="number" inputmode="numeric" data-f="hr" data-i="' + i + '" data-e="' + ei + '" data-s="' + si + '" value="' + (s.r != null ? s.r : '') + '">' +
+          '<button class="icon-btn sm" data-a="hist-rmset" data-i="' + i + '" data-e="' + ei + '" data-s="' + si + '">✕</button></div>'
+        ).join('') + '</div>'
+      ).join('') +
+      '<div class="hist-actions"><button class="linkbtn danger" data-a="hist-del" data-i="' + i + '">Delete session</button>' +
+      '<button class="btn-primary sm" data-a="hist-done" data-i="' + i + '">Done</button></div></div>';
+    }
     return `
-    <div class="card hist${open ? ' open' : ''}" data-a="hist-toggle" data-i="${i}">
-      <div class="hist-row">
+    <div class="card hist${open ? ' open' : ''}"${editing ? '' : ' data-a="hist-toggle" data-i="' + i + '"'}>
+      <div class="hist-row"${editing ? ' data-a="hist-toggle" data-i="' + i + '"' : ''}>
         <div><strong>${esc(groupLabels(w.groups))}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
-        <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + (w.volume >= 10000 ? (w.volume / 1000).toFixed(1) + 'k' : Math.round(w.volume)) + ' ' + unitLabel() : ''}</span></div>
+        <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}</span></div>
         <span class="chev">${open ? '⌄' : '›'}</span>
       </div>
       ${detail}
@@ -1160,6 +1324,77 @@ function viewHistory() {
   </div>
   ${tabbar('history')}`;
 }
+
+/* ----- trends ----- */
+
+function viewTrends() {
+  const list = loggedExercises();
+  const rows = list.map(x => {
+    const series = exerciseSeries(x.id);
+    const latest = series[series.length - 1];
+    const first = series[0];
+    let delta = '';
+    if (series.length >= 2 && latest.weighted) {
+      const d = latest.val - first.val;
+      delta = '<span class="trend-delta ' + (d > 0 ? 'up' : d < 0 ? 'down' : '') + '">' +
+        (d > 0 ? '↑ ' : d < 0 ? '↓ ' : '') + (d === 0 ? 'steady' : fmtW(Math.abs(d)) + ' ' + unitLabel()) + '</span>';
+    }
+    return `
+    <button class="card trend-row" data-a="open-trend" data-id="${esc(x.id)}">
+      <div class="trend-main">
+        <strong>${esc(x.name)}</strong>
+        <span class="muted small">${latest ? esc(latest.sub) : ''} · ${x.sessions} session${x.sessions === 1 ? '' : 's'} ${delta}</span>
+      </div>
+      ${sparkSVG(series.map(p => p.val)) || '<span class="chev">›</span>'}
+    </button>`;
+  }).join('');
+  return `
+  <div class="screen">
+    <header class="top"><div><div class="kicker">Your progress</div><h1>Trends</h1></div></header>
+    ${rows || '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>'}
+  </div>
+  ${tabbar('trends')}`;
+}
+
+function viewTrend() {
+  const id = S._trendEx;
+  const def = findEx(id);
+  const series = exerciseSeries(id);
+  if (!series.length) { route = 'trends'; return viewTrends(); }
+  const latest = series[series.length - 1];
+  const best = series.reduce((m, p) => p.val > m.val ? p : m, series[0]);
+  const bestEst = Math.max(...series.map(p => p.est || 0));
+  const first = series[0];
+  const change = latest.weighted && series.length >= 2 ? latest.val - first.val : null;
+  const name = def ? def.name : (latest && latest.name) || 'Exercise';
+  const unit = latest.weighted ? unitLabel() : (latest.mode === 'time' ? 'sec' : 'reps');
+  const recent = series.slice(-8).reverse().map(p =>
+    '<div class="hist-ex"><span class="muted">' + fmtDate(p.date) + '</span><span>' + esc(p.sub) + '</span></div>').join('');
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="trends">‹</button>
+      <div><div class="kicker">Trend</div><h1>${esc(name)}</h1></div>
+    </header>
+    <section class="card chart-card">
+      <div class="chart-cap"><span class="muted small">Heaviest set per session (${esc(unit)})</span></div>
+      ${bigChartSVG(series)}
+    </section>
+    <div class="stats-row">
+      <div class="stat"><strong>${fmtW(best.val)}</strong><span>best ${esc(unit)}</span></div>
+      <div class="stat"><strong>${fmtW(latest.val)}</strong><span>latest</span></div>
+      <div class="stat"><strong>${change == null ? '—' : (change > 0 ? '+' : '') + fmtW(change)}</strong><span>change</span></div>
+    </div>
+    ${latest.weighted && bestEst ? '<p class="fine">Estimated best 1-rep max: ' + fmtW(bestEst) + ' ' + unitLabel() + '</p>' : ''}
+    <section class="card">
+      <h2>Recent sessions</h2>
+      <div class="hist-detail" style="border:none;padding-top:2px">${recent}</div>
+    </section>
+  </div>
+  ${tabbar('trends')}`;
+}
+
+/* ----- profile ----- */
 
 /* ----- profile ----- */
 
@@ -1388,9 +1623,37 @@ document.addEventListener('click', ev => {
 
   else if (a === 'hist-toggle') {
     if (ev.target.closest('input')) return;
-    S._openHist = S._openHist === +el.dataset.i ? -1 : +el.dataset.i;
+    const i = +el.dataset.i;
+    if (S._editHist === i) { S._editHist = -1; render(); return; }
+    S._editHist = -1;
+    S._openHist = S._openHist === i ? -1 : i;
     render();
   }
+
+  else if (a === 'hist-edit') { S._editHist = +el.dataset.i; render(); }
+
+  else if (a === 'hist-done') { S._editHist = -1; recomputeEntry(+el.dataset.i); render(); }
+
+  else if (a === 'hist-del') {
+    const i = +el.dataset.i;
+    if (confirm('Delete this whole session? This can’t be undone.')) {
+      S.history.splice(i, 1);
+      S._editHist = -1; S._openHist = -1;
+      save(); toast('Session deleted.'); render();
+    }
+  }
+
+  else if (a === 'hist-rmset') {
+    const w = S.history[+el.dataset.i];
+    const e = w.exercises[+el.dataset.e];
+    e.sets.splice(+el.dataset.s, 1);
+    if (!e.sets.length) w.exercises.splice(+el.dataset.e, 1);
+    if (!w.exercises.length) { S.history.splice(+el.dataset.i, 1); S._editHist = -1; S._openHist = -1; }
+    else recomputeEntry(+el.dataset.i);
+    save(); render();
+  }
+
+  else if (a === 'open-trend') { S._trendEx = el.dataset.id; go('trend'); }
 
   else if (a === 'ob-theme' || a === 'set-theme') {
     const v = el.dataset.v;
@@ -1417,7 +1680,8 @@ document.addEventListener('click', ev => {
     save(); go('today');
   }
 
-  else if (a === 'export') exportData();
+  else if (a === 'export' || a === 'backup-now') { exportData(); if (a === 'backup-now') { toast('Saved. Choose “Save to Files” to keep it in iCloud.'); render(); } }
+  else if (a === 'snooze-backup') { S._snoozeBackup = true; render(); }
   else if (a === 'import') $('#import-file').click();
 
   else if (a === 'reset') {
@@ -1461,6 +1725,15 @@ document.addEventListener('input', ev => {
       if (f === 'w' && i === firstWeightedIndex()) refreshWarmup(i);
       save();
     }
+  } else if (f === 'hw' || f === 'hr') {
+    const w = S.history[+el.dataset.i];
+    const e = w && w.exercises[+el.dataset.e];
+    const s = e && e.sets[+el.dataset.s];
+    if (s) {
+      if (f === 'hw') s.w = el.value === '' ? 0 : +el.value;
+      else s.r = el.value === '' ? null : +el.value;
+      save(); // derived totals recompute on Done
+    }
   } else if (f === 'name') {
     S.profile.name = el.value.trim(); save();
   } else if (f === 'eq') {
@@ -1493,6 +1766,8 @@ function convertUnits(to) {
 }
 
 function exportData() {
+  S.lastBackupAt = todayISO();
+  save();
   const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const aEl = document.createElement('a');
@@ -1500,6 +1775,22 @@ function exportData() {
   aEl.download = 'spotter-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   document.body.appendChild(aEl); aEl.click(); aEl.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/* Sessions finished since the last backup. */
+function unsavedSessions() {
+  const since = S.lastBackupAt ? new Date(S.lastBackupAt).getTime() : 0;
+  return S.history.filter(w => new Date(w.date).getTime() > since).length;
+}
+
+/* Show the gentle backup nudge when online with enough new, unsaved sessions. */
+function backupDue() {
+  if (S._snoozeBackup) return 0;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 0;
+  const n = unsavedSessions();
+  if (n >= 3) return n;
+  if (n >= 1 && S.lastBackupAt && (Date.now() - new Date(S.lastBackupAt).getTime()) > 21 * DAY_MS) return n;
+  return 0;
 }
 
 document.addEventListener('change', ev => {
@@ -1514,6 +1805,7 @@ document.addEventListener('change', ev => {
       if (!confirm('Replace everything on this phone with the backup (' + (data.history || []).length + ' sessions)?')) return;
       localStorage.setItem(LS_KEY, JSON.stringify(data));
       S = loadState();
+      S.lastBackupAt = todayISO(); save();
       applyTheme(S.profile && S.profile.theme);
       toast('Backup restored.');
       go(S.profile ? 'today' : 'onboard');
@@ -1544,8 +1836,12 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+/* Re-check the backup nudge when the phone comes back online. */
+window.addEventListener('online', () => { if (route === 'today') render(); });
+
 /* ---------------- boot ---------------- */
 
+delete S._snoozeBackup; S._editHist = -1; // transient view state, fresh each launch
 applyTheme(S.profile && S.profile.theme);
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();
