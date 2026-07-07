@@ -807,14 +807,14 @@ function viewOnboard() {
         </div>
       </label>
       <label class="field"><span>Main goal</span>
-        <div class="seg seg3" id="ob-goal">
+        <div class="seg" id="ob-goal">
           <button data-v="fitness" class="on">Fitness</button>
           <button data-v="muscle">Muscle</button>
           <button data-v="strength">Strength</button>
         </div>
       </label>
       <label class="field"><span>Sex</span>
-        <div class="seg seg3" id="ob-sex">
+        <div class="seg" id="ob-sex">
           <button data-v="female">Female</button>
           <button data-v="male">Male</button>
           <button data-v="na" class="on">Prefer not to say</button>
@@ -875,7 +875,7 @@ function viewToday() {
       <div class="chips">${chips}</div>
       ${sugLine}
       <h2 class="mt">Time</h2>
-      <div class="seg seg3" id="min-seg">${mins}</div>
+      <div class="seg" id="min-seg">${mins}</div>
       <button class="btn-primary mt" data-a="generate" ${S.sel.groups.length ? '' : 'disabled'}>
         ${dumbbellSVG()} Build workout
       </button>
@@ -947,7 +947,7 @@ function checkinCard() {
     <section class="card">
       <h2>How are you feeling today?</h2>
       ${tend ? '<p class="muted small">' + esc(tend) + '</p>' : ''}
-      <div class="seg seg3" data-checkin="energy">${energySeg}</div>
+      <div class="seg" data-checkin="energy">${energySeg}</div>
       <p class="field-label">Anything going on? <span class="muted">tap any that apply</span></p>
       <div class="chips">${chips}</div>
       ${note}
@@ -1402,14 +1402,14 @@ function viewProfile() {
         </div>
       </label>
       <label class="field"><span>Main goal</span>
-        <div class="seg seg3" data-set="goal">
+        <div class="seg" data-set="goal">
           <button data-v="fitness" class="${p.goal === 'fitness' ? 'on' : ''}">Fitness</button>
           <button data-v="muscle" class="${p.goal === 'muscle' ? 'on' : ''}">Muscle</button>
           <button data-v="strength" class="${p.goal === 'strength' ? 'on' : ''}">Strength</button>
         </div>
       </label>
       <label class="field"><span>Sex</span>
-        <div class="seg seg3" data-set="sex">
+        <div class="seg" data-set="sex">
           <button data-v="female" class="${p.sex === 'female' ? 'on' : ''}">Female</button>
           <button data-v="male" class="${p.sex === 'male' ? 'on' : ''}">Male</button>
           <button data-v="na" class="${(!p.sex || p.sex === 'na') ? 'on' : ''}">N/A</button>

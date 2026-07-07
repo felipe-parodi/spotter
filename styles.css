@@ -11,8 +11,9 @@
   --line: #f1ddd2;
   --ink: #4a352e;
   --muted: #a4837a;
-  --accent: #e56a54;
-  --accent-soft: rgba(232, 122, 107, 0.13);
+  --accent: #d6553d;
+  --accent-soft: rgba(214, 85, 61, 0.12);
+  --danger: #c2412c;
   --on-ink: #ffffff;
   --on-accent: #ffffff;
   --radius: 22px;
@@ -21,7 +22,7 @@
   --r-btn: 100px;
   --shadow: 0 10px 26px -16px rgba(196, 100, 80, 0.42);
   --shadow-soft: 0 6px 16px -12px rgba(196, 100, 80, 0.38);
-  --glow: 0 10px 22px -8px rgba(229, 106, 84, 0.55);
+  --glow: 0 10px 22px -8px rgba(214, 85, 61, 0.5);
   /* one rounded family for the whole app — friendly, and free/offline on iPhone */
   --serif: ui-rounded, 'SF Pro Rounded', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
   --font: ui-rounded, 'SF Pro Rounded', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -35,8 +36,9 @@
     --line: #3f2d26;
     --ink: #f4e6df;
     --muted: #b89a8f;
-    --accent: #ec7a66;
-    --accent-soft: rgba(236, 122, 102, 0.16);
+    --accent: #e6735c;
+    --accent-soft: rgba(230, 115, 92, 0.16);
+    --danger: #e5806f;
     --on-ink: #211613;
     --on-accent: #2a1712;
     --shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.62);
@@ -195,8 +197,8 @@ h2 { font-size: 17px; }
 .btn-danger {
   padding: 13px;
   border-radius: var(--r-btn);
-  color: var(--accent);
-  border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--danger);
+  border: 1.5px solid color-mix(in srgb, var(--danger) 40%, transparent);
   font-weight: 800;
   font-size: 14px;
   margin-top: 4px;
@@ -348,9 +350,10 @@ h2 { font-size: 17px; }
   background: var(--accent);
   flex-shrink: 0;
 }
-.cycle[data-phase="follicular"] .cycle-dot { background: #4a9d7f; }
-.cycle[data-phase="ovulation"] .cycle-dot { background: #e0a53c; }
-.cycle[data-phase="luteal"] .cycle-dot { background: #9b7bb5; }
+/* softened, warm-leaning pastels so the phase coding harmonizes with Bloom */
+.cycle[data-phase="follicular"] .cycle-dot { background: #82b39a; }
+.cycle[data-phase="ovulation"] .cycle-dot { background: #e0a866; }
+.cycle[data-phase="luteal"] .cycle-dot { background: #b394c6; }
 .cycle-ease {
   font-size: 13px;
   font-weight: 600;
@@ -618,7 +621,7 @@ h2 { font-size: 17px; }
 .hist-ex .muted { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .hist-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 6px; }
-.linkbtn.danger { color: var(--danger, #dc2626); }
+.linkbtn.danger { color: var(--danger); }
 .btn-primary.sm { padding: 8px 18px; font-size: 11px; }
 .icon-btn.sm { width: 30px; height: 30px; font-size: 13px; }
 
