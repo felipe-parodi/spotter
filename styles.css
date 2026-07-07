@@ -381,8 +381,22 @@ h2 { font-size: 17px; }
   font-weight: 600;
   background: var(--accent-soft);
   border-radius: var(--r-ctl);
-  padding: 8px 11px;
+  padding: 10px 12px;
+  line-height: 1.5;
 }
+.cycle-ease.up { background: var(--sunken); }
+.linkbtn {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.field-label .muted { font-weight: 400; }
 
 .howto summary {
   font-size: 12px;

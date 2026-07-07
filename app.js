@@ -20,8 +20,8 @@ function defaultState() {
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
     sel: { groups: ['full'], minutes: 45 },
-    // optional cycle-aware mode (female profiles) — see cycle-science notes in README
-    cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], autoEase: false },
+    // optional cycle-aware mode (female profiles) — see cycle notes in README
+    cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], checkins: [] },
   };
 }
 
@@ -166,19 +166,66 @@ function cyclePhase() {
 }
 
 const PHASE_NOTE = {
-  menstruation: 'Train as usual if you feel up to it. Cramps or low energy? It’s fine to ease the load or pick lighter work — that’s listening to your body, not a rule.',
-  follicular: 'Many people feel strong through here — a good stretch to chase progression, if your body agrees.',
-  ovulation: 'Estrogen peaks around now and some feel at their strongest. Effects are individual, so go by how you feel.',
-  luteal: 'Some notice higher perceived effort premenstrually. If a session feels harder than the numbers say, trust that and dial it back.',
+  menstruation: 'You may feel tired or crampy now — or totally fine. Movement often helps cramps, so train if you’re up for it, and lean on the check-in for a gentler day when you need one.',
+  follicular: 'Energy and strength often climb through here. If you’re feeling it, this is a lovely stretch to chase a little progress.',
+  ovulation: 'Many feel at their strongest around now. A good window to push — as always, go by how your body feels today.',
+  luteal: 'Energy can dip and effort can feel higher premenstrually, and that’s normal. Be kind to yourself and let the check-in lighten things when it helps.',
 };
 
-const CYCLE_SCIENCE = 'The best current evidence (McNulty et al., 2020, a meta-analysis of 78 studies) finds cycle phase has only a trivial average effect on strength and endurance, with big person-to-person variation. So Spotter never blocks exercises by phase — it shows where you are and lets you adjust by feel.';
+const CYCLE_SCIENCE = 'Your cycle shapes energy, mood, and how training feels — and that’s different for everyone, and every month. So Spotter asks how you’re doing and adapts to that, instead of assuming a fixed rule. Push on the days you feel strong; ease off on the days you don’t.';
 
-/* optional load easing — only when the user turns it on, only during menstruation */
-function cycleEaseFactor() {
-  if (!cycleOn() || !S.cycle.autoEase) return 1;
+/* Exercises worth steering away from on a rough day: heavy spinal-loaded or
+   high-effort lifts that tend to be least comfortable with cramps/fatigue. */
+const HIGH_STRAIN = new Set(['deadlift', 'bb-squat', 'bb-rdl', 'bb-row', 'bb-ohp', 'kb-swing', 'smith-squat']);
+
+const NEG_SYMPTOMS = ['cramps', 'tired', 'low mood', 'poor sleep', 'headache', 'bloating'];
+
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+
+function todayCheckin() {
+  if (!cycleOn()) return null;
+  return (S.cycle.checkins || []).find(c => c.date === todayKey()) || null;
+}
+
+function setCheckin(patch) {
+  if (!S.cycle.checkins) S.cycle.checkins = [];
+  let c = S.cycle.checkins.find(x => x.date === todayKey());
+  if (!c) {
+    c = { date: todayKey(), energy: 'ok', symptoms: [], phase: (cyclePhase() || {}).key || null };
+    S.cycle.checkins.push(c);
+  }
+  Object.assign(c, patch);
+  // keep the log from growing without bound
+  if (S.cycle.checkins.length > 400) S.cycle.checkins = S.cycle.checkins.slice(-400);
+  save();
+}
+
+/* How today's session should adapt, derived from the daily check-in.
+   Neutral when no check-in is logged — nothing changes unless she tells us. */
+function todayReadiness() {
+  const c = todayCheckin();
+  const base = { load: 1, dropSet: false, gentle: false, hype: false, avoidStrain: false };
+  if (!c) return base;
+  const syms = c.symptoms || [];
+  const rough = c.energy === 'low' || syms.includes('cramps') || syms.includes('tired') || syms.length >= 2;
+  if (rough) return { load: 0.85, dropSet: true, gentle: true, hype: false, avoidStrain: true };
+  if (c.energy === 'great' && syms.length === 0) return { load: 1, dropSet: false, gentle: false, hype: true, avoidStrain: false };
+  return base;
+}
+
+function readinessLoad() { return todayReadiness().load; }
+
+/* Gentle multi-cycle pattern insight for the current phase. */
+function phaseTendency() {
   const p = cyclePhase();
-  return p && p.key === 'menstruation' ? 0.9 : 1;
+  if (!p) return '';
+  const past = (S.cycle.checkins || []).filter(c => c.date !== todayKey() && c.phase === p.key);
+  if (past.length < 2) return '';
+  const low = past.filter(c => c.energy === 'low' || (c.symptoms || []).includes('cramps') || (c.symptoms || []).includes('tired'));
+  if (low.length >= 2) return 'Around this phase you’ve often felt low — no pressure today, be kind to yourself.';
+  const great = past.filter(c => c.energy === 'great');
+  if (great.length >= 2) return 'You tend to feel strong around now.';
+  return '';
 }
 
 function logPeriodStart(iso) {
@@ -227,8 +274,8 @@ function lastPerf(exId) {
 function suggestFor(ex) {
   const perf = lastPerf(ex.id);
   const step = incrFor(ex);
-  const ease = cycleEaseFactor();
-  const easeNote = ease < 1 ? ' · eased ' + Math.round((1 - ease) * 100) + '% for today' : '';
+  const ease = readinessLoad();
+  const easeNote = ease < 1 ? ' · lighter today' : '';
   if (!perf) {
     return { w: null, note: step ? 'First time: pick a weight that leaves 2–3 reps in the tank.' : null, up: false };
   }
@@ -261,6 +308,7 @@ function assignParams(ex, minutes) {
   const p = goal[kind];
   let sets = p.sets, rest = p.rest;
   if (minutes <= 30) { sets = Math.min(sets, 3); rest = Math.round(rest * 0.8); }
+  if (todayReadiness().dropSet && sets > 2) sets -= 1; // gentler day
   return { sets, reps: p.reps.slice(), rest, kind };
 }
 
@@ -280,6 +328,7 @@ function pickExercise(muscle, usedIds, recent, preferCompound) {
   const pool = EXERCISES.filter(e =>
     e.m.includes(muscle) && !usedIds.has(e.id) && equipOK(e) && levelOK(e));
   if (!pool.length) return null;
+  const avoidStrain = todayReadiness().avoidStrain;
   let best = null, bestScore = -Infinity;
   for (const e of pool) {
     let score = Math.random() * 6;
@@ -289,6 +338,7 @@ function pickExercise(muscle, usedIds, recent, preferCompound) {
     if ((S.profile.goal === 'muscle' || S.profile.goal === 'strength') && !e.incr) score -= 5;
     if (S.profile.level === 'beginner' && e.lvl === 2) score -= 4;
     if (S.profile.level === 'experienced' && e.lvl === 1) score -= 1;
+    if (avoidStrain && HIGH_STRAIN.has(e.id)) score -= 15; // gentler day: steer away from heaviest lifts
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
@@ -405,6 +455,17 @@ function startFreestyle() {
   };
   S._picker = { q: '' };
   save(); acquireWakeLock(); go('workout');
+}
+
+/* A gentle, low-strain session for rough days — mobility, core, light glute work. */
+function restorativePlan() {
+  const ids = ['glute-bridge', 'bird-dog', 'dead-bug', 'side-plank', 'plank'];
+  const ex = ids.map(id => findEx(id)).filter(Boolean).map(def => {
+    const params = assignParams(def, 20);
+    params.sets = Math.min(params.sets, 2);
+    return snapshot(def, params);
+  });
+  return { groups: ['restorative'], minutes: 20, est: 20, restorative: true, ex };
 }
 
 function addToActive(def, opts) {
@@ -696,6 +757,7 @@ function viewToday() {
     </header>
     ${resume}
     ${cycleBanner()}
+    ${checkinCard()}
     <section class="card">
       <h2>Muscle groups</h2>
       <div class="chips">${chips}</div>
@@ -714,6 +776,7 @@ function viewToday() {
 
 function groupLabels(ids) {
   if (ids.includes('freestyle')) return 'Freestyle';
+  if (ids.includes('restorative')) return 'Restorative';
   const labels = UI_GROUPS.filter(g => ids.includes(g.id)).map(g => g.label);
   return labels.length ? labels.join(' + ') : 'Session';
 }
@@ -722,7 +785,6 @@ function cycleBanner() {
   if (!cycleOn()) return '';
   const p = cyclePhase();
   if (!p) return '';
-  const ease = cycleEaseFactor();
   return `
     <section class="card cycle" data-phase="${p.key}">
       <div class="cycle-head">
@@ -731,8 +793,36 @@ function cycleBanner() {
         <span class="muted small">day ${p.day}</span>
       </div>
       <p class="muted small">${esc(PHASE_NOTE[p.key])}</p>
-      ${ease < 1 ? '<p class="cycle-ease">Auto-ease is on — today’s suggested loads are trimmed 10%.</p>' : ''}
-      <details class="howto"><summary>The science</summary><p class="muted small" style="margin-top:8px">${esc(CYCLE_SCIENCE)}</p></details>
+      <details class="howto"><summary>How this works</summary><p class="muted small" style="margin-top:8px">${esc(CYCLE_SCIENCE)}</p></details>
+    </section>`;
+}
+
+function checkinCard() {
+  if (!cycleOn()) return '';
+  const c = todayCheckin();
+  const energy = c ? c.energy : null;
+  const syms = c ? (c.symptoms || []) : [];
+  const r = todayReadiness();
+  const energySeg = [['low', 'Low'], ['ok', 'Okay'], ['great', 'Great']].map(([v, label]) =>
+    '<button data-v="' + v + '"' + (energy === v ? ' class="on"' : '') + '>' + label + '</button>').join('');
+  const chips = NEG_SYMPTOMS.map(s =>
+    '<button class="chip' + (syms.includes(s) ? ' on' : '') + '" data-a="symptom" data-v="' + s + '">' + s + '</button>').join('');
+  let note = '';
+  if (c && r.gentle) {
+    note = '<div class="cycle-ease">Let’s keep today kind to you — your plan will lean lighter and gentler. ' +
+      '<button class="linkbtn" data-a="restorative">Rather do a restorative session?</button></div>';
+  } else if (c && r.hype) {
+    note = '<div class="cycle-ease up">You’re feeling great — a good day to push a little if you want it.</div>';
+  }
+  const tend = phaseTendency();
+  return `
+    <section class="card">
+      <h2>How are you feeling today?</h2>
+      ${tend ? '<p class="muted small">' + esc(tend) + '</p>' : ''}
+      <div class="seg seg3" data-checkin="energy">${energySeg}</div>
+      <p class="field-label">Anything going on? <span class="muted">tap any that apply</span></p>
+      <div class="chips">${chips}</div>
+      ${note}
     </section>`;
 }
 
@@ -756,9 +846,9 @@ function viewPreview() {
     <header class="top">
       <button class="back" data-a="nav" data-r="today">‹</button>
       <div><h1>${esc(groupLabels(d.groups))}</h1>
-      <p class="muted small">${goal.label} · about ${d.est} min · ${d.ex.length} exercises</p></div>
+      <p class="muted small">${d.restorative ? 'Gentle & low-impact' : goal.label} · about ${d.est} min · ${d.ex.length} exercises</p></div>
     </header>
-    <div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">${esc(warmupFor(d.groups))}</span></div>
+    ${d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups)) + '</span></div>'}
     <div class="card list">${rows}</div>
     <div class="row-btns">
       <button class="btn-ghost" data-a="regen">Reshuffle</button>
@@ -1155,7 +1245,7 @@ function cycleSettings() {
   return `
   <section class="card">
     <h2>Cycle-aware training</h2>
-    <p class="muted small">Optional. Tracks your cycle and shows the phase so you can train by feel. It never blocks exercises — the evidence says phase effects on performance are small and very individual.</p>
+    <p class="muted small">Optional, and yours alone. When it’s on, the home screen asks how you’re feeling each day and shapes your workout to match — lighter and gentler on rough days, encouraging on strong ones. It never locks you out of anything; you’re always in charge.</p>
     <label class="switch-row"><span>Enable cycle tracking</span>
       <input type="checkbox" data-f="cycle-enabled" ${c.enabled ? 'checked' : ''}><i></i>
     </label>
@@ -1173,9 +1263,6 @@ function cycleSettings() {
       </label>
       <button class="btn-ghost" data-a="log-period">Log period start</button>
       ${last ? '<p class="muted small">Last logged: ' + esc(fmtDate(last + 'T00:00')) + (phase ? ' · currently <strong>' + esc(phase.label.toLowerCase()) + '</strong>, day ' + phase.day : '') + ' · ' + c.starts.length + ' logged</p>' : '<p class="muted small">No periods logged yet — add one to start predictions.</p>'}
-      <label class="switch-row"><span>Auto-ease loads 10% during your period<br><span class="muted small">Suggestions only — you can always override</span></span>
-        <input type="checkbox" data-f="cycle-ease" ${c.autoEase ? 'checked' : ''}><i></i>
-      </label>
     ` : ''}
   </section>`;
 }
@@ -1198,6 +1285,10 @@ document.addEventListener('click', ev => {
       if (key === 'units' && S.profile.units !== val) convertUnits(val);
       S.profile[key] = val; save();
       if (key === 'sex') render(); // reveal/hide the cycle section
+    }
+    if (seg.dataset.checkin === 'energy') {
+      setCheckin({ energy: segBtn.dataset.v });
+      render(); // refresh the supportive note + downstream suggestions
     }
     return;
   }
@@ -1235,6 +1326,21 @@ document.addEventListener('click', ev => {
     logPeriodStart(input ? input.value + 'T00:00:00.000Z' : null);
     toast('Period start logged.');
     render();
+  }
+
+  else if (a === 'symptom') {
+    const c = todayCheckin() || {};
+    const syms = (c.symptoms || []).slice();
+    const v = el.dataset.v;
+    const idx = syms.indexOf(v);
+    if (idx >= 0) syms.splice(idx, 1); else syms.push(v);
+    setCheckin({ symptoms: syms });
+    render();
+  }
+
+  else if (a === 'restorative') {
+    S.draft = restorativePlan();
+    save(); go('preview');
   }
 
   else if (a === 'freestyle') startFreestyle();
@@ -1364,8 +1470,6 @@ document.addEventListener('input', ev => {
     S.profile[f] = el.value === '' || !(v >= 0) ? null : v; save();
   } else if (f === 'cycle-enabled') {
     S.cycle.enabled = el.checked; save(); render();
-  } else if (f === 'cycle-ease') {
-    S.cycle.autoEase = el.checked; save();
   } else if (f === 'cycle-avg') {
     const v = parseInt(el.value, 10);
     if (v >= 21 && v <= 40) { S.cycle.avgLen = v; save(); }

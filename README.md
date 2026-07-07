@@ -26,29 +26,34 @@ after install — each phone keeps its own profile and history.
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).
 
-## On the cycle-aware feature (and the science)
+## On the cycle-aware feature
 
-Cycle tracking is **opt-in** and only appears for profiles set to female. When
-on, it predicts your cycle phase from logged period-start dates and shows it on
-the Today screen with a short, honest note. It also offers an **optional**
-"ease loads 10% during your period" toggle.
+Cycle tracking is **opt-in** and only appears for profiles set to female. The
+cycle genuinely affects energy, mood, cramps, sleep, and motivation — and all of
+that is different for every person and every month. So the feature is built
+around a **daily check-in** rather than fixed rules:
 
-Crucially, it **never blocks, hides, or forbids exercises by phase.** That's a
-deliberate, evidence-based choice. The popular idea that women shouldn't do
-strenuous training in a given phase isn't supported by the current literature:
+- Each day the home screen asks *"How are you feeling?"* — an energy level
+  (low / okay / great) plus optional symptom chips (cramps, tired, low mood,
+  poor sleep, headache, bloating).
+- On a **rough day** the generated workout adapts: lighter suggested loads (~15%),
+  one fewer set on compounds, and selection steered away from the heaviest
+  spinal-loaded lifts (`HIGH_STRAIN` in `app.js`) toward gentler movements. It
+  also offers a one-tap **restorative session** (mobility + core). Nothing is
+  forced.
+- On a **strong day** it encourages pushing / progression.
+- It shows the predicted phase for context and learns patterns over cycles
+  (e.g. "around this phase you've often felt low — be kind to yourself").
 
-> McNulty et al. (2020), *Sports Medicine* — systematic review + network
-> meta-analysis of 78 studies — found menstrual cycle phase has only a **trivial**
-> average effect on strength/endurance performance (effect size ≈ −0.06), with
-> large between-person variation, and concluded that **general phase-based
-> guidelines can't be formed; a personalised, feel-based approach is
-> recommended.** (doi:10.1007/s40279-020-01319-3)
-
-A 2023 meta-analysis similarly found hormonal contraceptives don't meaningfully
-change strength/hypertrophy adaptations (doi:10.1007/s40279-023-01911-3). So the
-feature is built for **awareness and self-regulation** (training by feel, which
-is legitimate RPE-based practice), not rigid rules. If future evidence shifts,
-the phase notes in `app.js` (`PHASE_NOTE`, `CYCLE_SCIENCE`) are where to update.
+**Why check-in-driven rather than phase-rule-driven:** the design follows the
+individualized approach the evidence actually recommends. Population-level
+"don't train hard in phase X" rules aren't supported — McNulty et al. (2020),
+*Sports Medicine*, a network meta-analysis of 78 studies, found only a **trivial**
+average effect of cycle phase on performance with large between-person variation,
+and concluded a **personalised, feel-based approach** is what's warranted
+(doi:10.1007/s40279-020-01319-3). Responding to how *she* actually feels today is
+that personalisation. Supportive copy lives in `PHASE_NOTE` / `CYCLE_SCIENCE` and
+the adaptation logic in `todayReadiness()` — both easy to tune with her feedback.
 
 ## Run it locally (Mac)
 
