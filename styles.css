@@ -1,76 +1,47 @@
 /* ============================================================
    Spotter — styles
-   Gym-journal editorial: paper & ink, serif headlines, hairline
-   rules, one red-pen accent. Charcoal automatically in dark mode.
+   "Bloom": soft, warm, rounded. Blush ground, coral warmth,
+   pillowy corners, gentle shadows, rounded type. Auto dark mode.
    ============================================================ */
 
 :root {
-  --bg: #f5f1e8;
-  --surface: #fbf8f1;
-  --sunken: #ede8db;
-  --line: #ddd5c2;
-  --ink: #211e19;
-  --muted: #7a7263;
-  --accent: #b03b22;
-  --accent-soft: rgba(176, 59, 34, 0.09);
-  --on-ink: #f5f1e8;
-  --radius: 8px;
-  --r-ctl: 6px;
-  --r-chip: 6px;
-  --serif: ui-serif, Georgia, 'Times New Roman', serif;
+  --bg: #fbeee7;
+  --surface: #ffffff;
+  --sunken: #f7e6dd;
+  --line: #f1ddd2;
+  --ink: #4a352e;
+  --muted: #a4837a;
+  --accent: #e56a54;
+  --accent-soft: rgba(232, 122, 107, 0.13);
+  --on-ink: #ffffff;
+  --on-accent: #ffffff;
+  --radius: 22px;
+  --r-ctl: 14px;
+  --r-chip: 100px;
+  --r-btn: 100px;
+  --shadow: 0 10px 26px -16px rgba(196, 100, 80, 0.42);
+  --shadow-soft: 0 6px 16px -12px rgba(196, 100, 80, 0.38);
+  --glow: 0 10px 22px -8px rgba(229, 106, 84, 0.55);
+  /* one rounded family for the whole app — friendly, and free/offline on iPhone */
+  --serif: ui-rounded, 'SF Pro Rounded', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font: ui-rounded, 'SF Pro Rounded', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #191713;
-    --surface: #201d18;
-    --sunken: #26221c;
-    --line: #363023;
-    --ink: #eae4d6;
-    --muted: #97907f;
-    --accent: #e05a3c;
-    --accent-soft: rgba(224, 90, 60, 0.13);
-    --on-ink: #191713;
-  }
-}
-
-/* ----- themes: same journal structure, softer voices.
-   Each phone picks its own in onboarding / Profile. ----- */
-
-:root[data-theme="blush"] {
-  --bg: #f8efe9; --surface: #fdf8f4; --sunken: #f2e5dd; --line: #e9d6cc;
-  --ink: #43302c; --muted: #97817a;
-  --accent: #c26e7d; --accent-soft: rgba(194, 110, 125, 0.12); --on-ink: #f8efe9;
-  --radius: 16px; --r-ctl: 10px; --r-chip: 100px;
-}
-:root[data-theme="sage"] {
-  --bg: #eff1e7; --surface: #f8f9f2; --sunken: #e5e9d8; --line: #d7dcc5;
-  --ink: #2e352c; --muted: #7c8471;
-  --accent: #6e8b5d; --accent-soft: rgba(110, 139, 93, 0.13); --on-ink: #eff1e7;
-  --radius: 16px; --r-ctl: 10px; --r-chip: 100px;
-}
-:root[data-theme="lilac"] {
-  --bg: #f2eef6; --surface: #faf7fc; --sunken: #e9e2f0; --line: #ddd2e6;
-  --ink: #352e3d; --muted: #86798f;
-  --accent: #8d6fae; --accent-soft: rgba(141, 111, 174, 0.12); --on-ink: #f2eef6;
-  --radius: 16px; --r-ctl: 10px; --r-chip: 100px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="blush"] {
-    --bg: #221a18; --surface: #2b2220; --sunken: #322824; --line: #443631;
-    --ink: #f2e6e0; --muted: #a8938c;
-    --accent: #db93a0; --accent-soft: rgba(219, 147, 160, 0.14); --on-ink: #221a18;
-  }
-  :root[data-theme="sage"] {
-    --bg: #1a1e17; --surface: #232820; --sunken: #2a3026; --line: #3a4234;
-    --ink: #e6eadd; --muted: #99a28c;
-    --accent: #9cb587; --accent-soft: rgba(156, 181, 135, 0.14); --on-ink: #1a1e17;
-  }
-  :root[data-theme="lilac"] {
-    --bg: #1d1a21; --surface: #26222b; --sunken: #2d2833; --line: #3f3847;
-    --ink: #eae4f0; --muted: #a196ac;
-    --accent: #b295cf; --accent-soft: rgba(178, 149, 207, 0.15); --on-ink: #1d1a21;
+    --bg: #211613;
+    --surface: #2c211c;
+    --sunken: #352620;
+    --line: #3f2d26;
+    --ink: #f4e6df;
+    --muted: #b89a8f;
+    --accent: #ec7a66;
+    --accent-soft: rgba(236, 122, 102, 0.16);
+    --on-ink: #211613;
+    --on-accent: #2a1712;
+    --shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.62);
+    --shadow-soft: 0 8px 20px -14px rgba(0, 0, 0, 0.55);
+    --glow: 0 10px 24px -10px rgba(236, 122, 102, 0.5);
   }
 }
 
@@ -79,7 +50,7 @@
 html { height: 100%; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font);
   background: var(--bg);
   color: var(--ink);
   line-height: 1.5;
@@ -91,7 +62,7 @@ body {
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input { font: inherit; color: inherit; }
 
-h1, h2, .serif { font-family: var(--serif); font-weight: 700; letter-spacing: -0.01em; }
+h1, h2, .serif { font-family: var(--serif); font-weight: 800; letter-spacing: -0.02em; }
 
 .kicker {
   font-size: 11px;
@@ -138,10 +109,11 @@ h2 { font-size: 17px; }
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 17px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: var(--shadow);
 }
 
 .rule { border: none; border-top: 1px solid var(--line); margin: 2px 0; }
@@ -151,79 +123,82 @@ h2 { font-size: 17px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .chip {
-  padding: 8px 14px;
+  padding: 9px 15px;
   border-radius: var(--r-chip);
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: var(--sunken);
+  color: color-mix(in srgb, var(--accent) 78%, var(--ink));
   font-size: 14px;
-  font-weight: 600;
-  transition: all 0.12s ease;
+  font-weight: 700;
+  transition: transform 0.12s ease, background 0.12s ease;
 }
 .chip.on {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--on-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  transform: scale(1.03);
 }
 
 .seg {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  border: 1px solid var(--line);
-  border-radius: var(--r-ctl);
-  background: var(--surface);
-  overflow: hidden;
+  border-radius: var(--r-chip);
+  background: var(--sunken);
+  padding: 4px;
+  gap: 2px;
 }
 .seg button {
   padding: 10px 6px;
   font-size: 14px;
-  font-weight: 600;
-  color: var(--muted);
-  border-left: 1px solid var(--line);
-  transition: all 0.12s ease;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+  border-radius: var(--r-chip);
+  transition: all 0.14s ease;
 }
-.seg button:first-child { border-left: none; }
-.seg button.on { background: var(--ink); color: var(--on-ink); }
+.seg button.on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-soft);
+}
 
 /* ---------------- buttons ---------------- */
 
 .btn-primary {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  background: var(--ink);
-  color: var(--on-ink);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 15.5px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   padding: 16px;
-  border-radius: var(--r-ctl);
-  transition: transform 0.1s ease, opacity 0.15s;
+  border-radius: var(--r-btn);
+  box-shadow: var(--glow);
+  transition: transform 0.12s ease, opacity 0.15s;
 }
-.btn-primary:active { transform: scale(0.98); }
-.btn-primary:disabled { opacity: 0.35; }
+.btn-primary:active { transform: scale(0.97); }
+.btn-primary:disabled { opacity: 0.4; box-shadow: none; }
 .btn-primary.big { margin-top: 6px; }
-.btn-primary .db { width: 18px; height: 18px; fill: currentColor; }
+.btn-primary .db { width: 19px; height: 19px; fill: currentColor; }
 
 .btn-ghost {
   flex: 1;
-  padding: 13px;
-  border-radius: var(--r-ctl);
-  border: 1px solid var(--ink);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  padding: 14px;
+  border-radius: var(--r-btn);
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 14.5px;
 }
 
 .btn-danger {
-  padding: 12px;
-  border-radius: var(--r-ctl);
+  padding: 13px;
+  border-radius: var(--r-btn);
   color: var(--accent);
-  border: 1px solid var(--accent);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 800;
+  font-size: 14px;
   margin-top: 4px;
 }
 
@@ -716,8 +691,8 @@ h2 { font-size: 17px; }
   background: var(--muted);
   transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
 }
-.switch-row input:checked + i { background: var(--ink); border-color: var(--ink); }
-.switch-row input:checked + i::after { left: 19px; background: var(--on-ink); }
+.switch-row input:checked + i { background: var(--accent); border-color: var(--accent); }
+.switch-row input:checked + i::after { left: 19px; background: #fff; }
 
 /* ---------------- tab bar ---------------- */
 
@@ -741,7 +716,7 @@ h2 { font-size: 17px; }
   transition: color 0.15s;
 }
 .tab svg { width: 22px; height: 22px; fill: currentColor; }
-.tab.on { color: var(--ink); }
+.tab.on { color: var(--accent); }
 .tab.on svg { fill: var(--accent); }
 
 /* ---------------- onboarding ---------------- */
@@ -749,14 +724,15 @@ h2 { font-size: 17px; }
 .onboard { justify-content: center; min-height: 92vh; }
 .ob-hero { text-align: center; padding: 10px 0 8px; }
 .logo-mark {
-  width: 70px; height: 70px;
+  width: 72px; height: 72px;
   margin: 0 auto 14px;
-  border-radius: 16px;
-  background: var(--ink);
+  border-radius: 22px;
+  background: var(--accent);
   display: grid; place-items: center;
+  box-shadow: var(--glow);
 }
-.logo-mark .db { width: 40px; height: 40px; fill: var(--on-ink); }
-.ob-hero h1 { font-size: 38px; }
+.logo-mark .db { width: 40px; height: 40px; fill: var(--on-accent); }
+.ob-hero h1 { font-size: 40px; }
 .ob-hero .sub { color: var(--muted); margin-top: 4px; font-size: 15px; }
 
 /* ---------------- toast ---------------- */
@@ -789,22 +765,3 @@ h2 { font-size: 17px; }
   margin-left: 10px;
   font-size: 13px;
 }
-
-/* ---------------- theme swatches ---------------- */
-
-.swatches { display: flex; gap: 16px; padding: 2px 0; }
-.swatch {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  font-size: 11px; font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-.swatch i {
-  width: 44px; height: 44px;
-  border-radius: 50%;
-  border: 2px solid var(--line);
-  background: var(--sw);
-  transition: transform 0.12s ease, border-color 0.12s;
-}
-.swatch.on { color: var(--ink); }
-.swatch.on i { border-color: var(--ink); transform: scale(1.1); }

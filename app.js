@@ -60,29 +60,16 @@ const KG = 0.45359237;
 const HAS_IMG = typeof IMG_IDS !== 'undefined' ? new Set(IMG_IDS) : new Set();
 const HOWTO = typeof INSTRUCTIONS !== 'undefined' ? INSTRUCTIONS : {};
 
-/* ---------------- themes ---------------- */
+/* ---------------- theme ---------------- */
+/* Single "Bloom" aesthetic — the palette lives entirely in styles.css.
+   This just keeps the browser chrome (status bar tint) in sync. */
 
-const THEMES = {
-  journal: { label: 'Journal', bgLight: '#f5f1e8', bgDark: '#191713', swatch: 'linear-gradient(135deg,#f5f1e8 50%,#b03b22 50%)' },
-  blush:   { label: 'Blush',   bgLight: '#f8efe9', bgDark: '#221a18', swatch: 'linear-gradient(135deg,#f8efe9 50%,#c26e7d 50%)' },
-  sage:    { label: 'Sage',    bgLight: '#eff1e7', bgDark: '#1a1e17', swatch: 'linear-gradient(135deg,#eff1e7 50%,#6e8b5d 50%)' },
-  lilac:   { label: 'Lilac',   bgLight: '#f2eef6', bgDark: '#1d1a21', swatch: 'linear-gradient(135deg,#f2eef6 50%,#8d6fae 50%)' },
-};
-
-function applyTheme(t) {
-  if (!THEMES[t]) t = 'journal';
-  document.documentElement.dataset.theme = t;
+function applyTheme() {
+  document.documentElement.removeAttribute('data-theme');
   document.querySelectorAll('meta[name="theme-color"]').forEach(m => {
     const media = m.getAttribute('media') || '';
-    m.setAttribute('content', media.includes('dark') ? THEMES[t].bgDark : THEMES[t].bgLight);
+    m.setAttribute('content', media.includes('dark') ? '#211613' : '#fbeee7');
   });
-}
-
-function swatchesHTML(current, action) {
-  return '<div class="swatches">' + Object.entries(THEMES).map(([id, t]) =>
-    '<button class="swatch' + (current === id ? ' on' : '') + '" data-a="' + action + '" data-v="' + id + '">' +
-    '<i style="--sw:' + t.swatch + '"></i>' + t.label + '</button>'
-  ).join('') + '</div>';
 }
 
 function unitLabel() { return S.profile && S.profile.units === 'kg' ? 'kg' : 'lb'; }
@@ -842,9 +829,6 @@ function viewOnboard() {
       <label class="field"><span>Bodyweight — optional</span>
         <input id="ob-bw" type="number" inputmode="decimal" placeholder="e.g. 150" min="0" autocomplete="off">
       </label>
-      <label class="field"><span>Your look</span>
-        ${swatchesHTML(S._obTheme || 'journal', 'ob-theme')}
-      </label>
       <button class="btn-primary" data-a="ob-start">Start</button>
     </div>
     <p class="fine">Two of you? Open this page on each phone and Add to Home Screen — each keeps its own log.</p>
@@ -1445,9 +1429,6 @@ function viewProfile() {
           <input type="number" inputmode="decimal" data-f="bodyfat" value="${p.bodyfat != null ? p.bodyfat : ''}" placeholder="—" min="0" max="70">
         </label>
       </div>
-      <label class="field"><span>Look — each phone keeps its own</span>
-        ${swatchesHTML(p.theme || 'journal', 'set-theme')}
-      </label>
     </section>
     ${cycleSettings()}
     <section class="card">
@@ -1655,14 +1636,6 @@ document.addEventListener('click', ev => {
 
   else if (a === 'open-trend') { S._trendEx = el.dataset.id; go('trend'); }
 
-  else if (a === 'ob-theme' || a === 'set-theme') {
-    const v = el.dataset.v;
-    applyTheme(v);
-    el.parentElement.querySelectorAll('.swatch').forEach(b => b.classList.toggle('on', b === el));
-    if (a === 'set-theme') { S.profile.theme = v; save(); }
-    else S._obTheme = v;
-  }
-
   else if (a === 'ob-start') {
     const name = $('#ob-name').value.trim();
     const bw = parseFloat($('#ob-bw').value);
@@ -1674,9 +1647,7 @@ document.addEventListener('click', ev => {
       units: $('#ob-units .on').dataset.v,
       bodyweight: bw > 0 ? bw : null,
       bodyfat: null,
-      theme: S._obTheme || 'journal',
     };
-    delete S._obTheme;
     save(); go('today');
   }
 
@@ -1688,7 +1659,7 @@ document.addEventListener('click', ev => {
     if (confirm('Erase your profile and ALL history on this phone? This cannot be undone.')) {
       localStorage.removeItem(LS_KEY);
       S = defaultState();
-      applyTheme('journal');
+      applyTheme();
       go('onboard');
     }
   }
@@ -1806,7 +1777,7 @@ document.addEventListener('change', ev => {
       localStorage.setItem(LS_KEY, JSON.stringify(data));
       S = loadState();
       S.lastBackupAt = todayISO(); save();
-      applyTheme(S.profile && S.profile.theme);
+      applyTheme();
       toast('Backup restored.');
       go(S.profile ? 'today' : 'onboard');
     } catch (e) { toast('That file doesn’t look like a Spotter backup.'); }
@@ -1842,7 +1813,7 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 /* ---------------- boot ---------------- */
 
 delete S._snoozeBackup; S._editHist = -1; // transient view state, fresh each launch
-applyTheme(S.profile && S.profile.theme);
+applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();
 if (S.active) acquireWakeLock();

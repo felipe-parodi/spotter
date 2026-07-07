@@ -87,7 +87,7 @@ Each phone that installs it gets its own independent profile and history
 | File | What it is |
 |---|---|
 | `index.html` | Shell — loads everything |
-| `styles.css` | All styling (paper/ink editorial, dark mode auto) |
+| `styles.css` | All styling ("Bloom": soft coral, rounded, dark mode auto) |
 | `db.js` | Exercise database + goal parameters |
 | `app.js` | Generator, workout flow, progression, storage |
 | `sw.js` | Offline cache (bump `VERSION` on deploy!) |
