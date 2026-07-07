@@ -360,6 +360,30 @@ h2 { font-size: 17px; }
 }
 .sugg.up { background: var(--accent-soft); }
 
+.howto summary {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.howto summary::-webkit-details-marker { display: none; }
+.howto summary::before { content: '+ '; color: var(--accent); }
+.howto[open] summary::before { content: '− '; }
+.howto ol {
+  margin: 8px 0 2px 18px;
+  font-size: 13.5px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.howto ol li::marker { color: var(--accent); font-weight: 700; }
+
 .warmup-line {
   font-size: 13px;
   color: var(--muted);

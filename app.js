@@ -53,6 +53,7 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const KG = 0.45359237;
 const HAS_IMG = typeof IMG_IDS !== 'undefined' ? new Set(IMG_IDS) : new Set();
+const HOWTO = typeof INSTRUCTIONS !== 'undefined' ? INSTRUCTIONS : {};
 
 /* ---------------- themes ---------------- */
 
@@ -728,6 +729,7 @@ function exerciseCard(e, i) {
     ${demoHTML(e.id, e.name)}
     ${sugg.note ? '<div class="sugg' + (sugg.up ? ' up' : '') + '">' + esc(sugg.note) + '</div>' : ''}
     ${e.cue ? '<p class="cue">' + esc(e.cue) + '</p>' : ''}
+    ${howtoHTML(e.id)}
     ${warmupSetsHTML(e, i)}
     <div class="set-grid">
       <div class="set-head"><span>Set</span><span>${e.mode === 'time' || !weightApplies(e) ? '' : 'Weight (' + unitLabel() + ')'}</span><span>${e.mode === 'time' ? 'Seconds' : 'Reps'}</span><span></span></div>
@@ -754,6 +756,13 @@ function setRow(e, i, s, j) {
   </div>`;
 }
 
+function howtoHTML(id) {
+  const steps = HOWTO[id];
+  if (!steps || !steps.length) return '';
+  return '<details class="howto"><summary>How to do it</summary><ol>' +
+    steps.map(s => '<li>' + esc(s) + '</li>').join('') + '</ol></details>';
+}
+
 function weightApplies(e) {
   const orig = findEx(e.id);
   return orig ? orig.incr > 0 : true;
@@ -772,7 +781,15 @@ function updateWorkoutDOM(i, j) {
     if (rIn && s.r != null) rIn.value = s.r;
   }
   const card = $('#ex-' + i);
-  if (card) card.classList.toggle('done', a.ex[i].log.every(x => x.done));
+  if (card) {
+    const wasDone = card.classList.contains('done');
+    const nowDone = a.ex[i].log.every(x => x.done);
+    card.classList.toggle('done', nowDone);
+    if (nowDone && !wasDone && i < a.ex.length - 1) {
+      const next = $('#ex-' + (i + 1));
+      if (next && next.scrollIntoView) setTimeout(() => next.scrollIntoView({ behavior: 'smooth', block: 'start' }), 350);
+    }
+  }
   const doneSets = a.ex.reduce((n, e) => n + e.log.filter(x => x.done).length, 0);
   const totalSets = a.ex.reduce((n, e) => n + e.log.length, 0);
   const pbar = $('#pbar'); if (pbar) pbar.style.width = (100 * doneSets / Math.max(1, totalSets)) + '%';

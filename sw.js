@@ -4,7 +4,7 @@
 
 importScripts('./precache-manifest.js');
 
-const VERSION = 'v2.1.0';
+const VERSION = 'v2.2.0';
 const CACHE = 'spotter-' + VERSION;
 
 const ASSETS = [
@@ -14,6 +14,7 @@ const ASSETS = [
   './app.js',
   './db.js',
   './precache-manifest.js',
+  './exercise-info.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
