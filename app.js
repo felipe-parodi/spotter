@@ -54,6 +54,31 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;'
 const KG = 0.45359237;
 const HAS_IMG = typeof IMG_IDS !== 'undefined' ? new Set(IMG_IDS) : new Set();
 
+/* ---------------- themes ---------------- */
+
+const THEMES = {
+  journal: { label: 'Journal', bgLight: '#f5f1e8', bgDark: '#191713', swatch: 'linear-gradient(135deg,#f5f1e8 50%,#b03b22 50%)' },
+  blush:   { label: 'Blush',   bgLight: '#f8efe9', bgDark: '#221a18', swatch: 'linear-gradient(135deg,#f8efe9 50%,#c26e7d 50%)' },
+  sage:    { label: 'Sage',    bgLight: '#eff1e7', bgDark: '#1a1e17', swatch: 'linear-gradient(135deg,#eff1e7 50%,#6e8b5d 50%)' },
+  lilac:   { label: 'Lilac',   bgLight: '#f2eef6', bgDark: '#1d1a21', swatch: 'linear-gradient(135deg,#f2eef6 50%,#8d6fae 50%)' },
+};
+
+function applyTheme(t) {
+  if (!THEMES[t]) t = 'journal';
+  document.documentElement.dataset.theme = t;
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => {
+    const media = m.getAttribute('media') || '';
+    m.setAttribute('content', media.includes('dark') ? THEMES[t].bgDark : THEMES[t].bgLight);
+  });
+}
+
+function swatchesHTML(current, action) {
+  return '<div class="swatches">' + Object.entries(THEMES).map(([id, t]) =>
+    '<button class="swatch' + (current === id ? ' on' : '') + '" data-a="' + action + '" data-v="' + id + '">' +
+    '<i style="--sw:' + t.swatch + '"></i>' + t.label + '</button>'
+  ).join('') + '</div>';
+}
+
 function unitLabel() { return S.profile && S.profile.units === 'kg' ? 'kg' : 'lb'; }
 
 function allExercises() { return EXERCISES.concat(S.custom || []); }
@@ -533,6 +558,9 @@ function viewOnboard() {
           <button data-v="kg">kg</button>
         </div>
       </label>
+      <label class="field"><span>Your look</span>
+        ${swatchesHTML(S._obTheme || 'journal', 'ob-theme')}
+      </label>
       <button class="btn-primary" data-a="ob-start">Start</button>
     </div>
     <p class="fine">Two of you? Open this page on each phone and Add to Home Screen — each keeps its own log.</p>
@@ -919,6 +947,9 @@ function viewProfile() {
           <button data-v="kg" class="${p.units === 'kg' ? 'on' : ''}">kg</button>
         </div>
       </label>
+      <label class="field"><span>Look — each phone keeps its own</span>
+        ${swatchesHTML(p.theme || 'journal', 'set-theme')}
+      </label>
     </section>
     <section class="card">
       <h2>Gym equipment</h2>
@@ -1038,6 +1069,14 @@ document.addEventListener('click', ev => {
     render();
   }
 
+  else if (a === 'ob-theme' || a === 'set-theme') {
+    const v = el.dataset.v;
+    applyTheme(v);
+    el.parentElement.querySelectorAll('.swatch').forEach(b => b.classList.toggle('on', b === el));
+    if (a === 'set-theme') { S.profile.theme = v; save(); }
+    else S._obTheme = v;
+  }
+
   else if (a === 'ob-start') {
     const name = $('#ob-name').value.trim();
     S.profile = {
@@ -1045,7 +1084,9 @@ document.addEventListener('click', ev => {
       level: $('#ob-level .on').dataset.v,
       goal: $('#ob-goal .on').dataset.v,
       units: $('#ob-units .on').dataset.v,
+      theme: S._obTheme || 'journal',
     };
+    delete S._obTheme;
     save(); go('today');
   }
 
@@ -1056,6 +1097,7 @@ document.addEventListener('click', ev => {
     if (confirm('Erase your profile and ALL history on this phone? This cannot be undone.')) {
       localStorage.removeItem(LS_KEY);
       S = defaultState();
+      applyTheme('journal');
       go('onboard');
     }
   }
@@ -1127,6 +1169,7 @@ document.addEventListener('change', ev => {
       if (!confirm('Replace everything on this phone with the backup (' + (data.history || []).length + ' sessions)?')) return;
       localStorage.setItem(LS_KEY, JSON.stringify(data));
       S = loadState();
+      applyTheme(S.profile && S.profile.theme);
       toast('Backup restored.');
       go(S.profile ? 'today' : 'onboard');
     } catch (e) { toast('That file doesn’t look like a Spotter backup.'); }
@@ -1158,6 +1201,7 @@ if ('serviceWorker' in navigator) {
 
 /* ---------------- boot ---------------- */
 
+applyTheme(S.profile && S.profile.theme);
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();
 if (S.active) acquireWakeLock();
