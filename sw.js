@@ -4,7 +4,7 @@
 
 importScripts('./precache-manifest.js');
 
-const VERSION = 'v3.1.0';
+const VERSION = 'v3.2.0';
 const CACHE = 'spotter-' + VERSION;
 
 const ASSETS = [

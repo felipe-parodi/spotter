@@ -7,21 +7,34 @@ after install — each phone keeps its own profile and history.
 
 - Pick muscle groups (e.g. *Back + Legs*) and a duration (30/45/60 min) → get a
   balanced plan with specific sets, reps, rest times, a form cue, and start/end
-  demo photos per exercise.
-- Plans are built from a ~60-exercise database filtered by your gym's equipment
-  (toggle what your gym has in **Profile → Gym equipment**).
+  demo photos per exercise. Tap any photo for a fullscreen lightbox with
+  pinch/double-tap zoom, pan, and alternate-angle frames.
+- Plans are built from a ~65-exercise database — now including **cardio**
+  (treadmill, bike, rower, elliptical, stair climber, jump rope; logged in
+  minutes) — filtered by your gym's equipment (toggle what your gym has in
+  **Profile → Gym equipment**). Selecting the Cardio chip appends one cardio
+  finisher block to the plan.
 - Beginner vs. experienced modes gate out technical lifts; goal (fitness /
   muscle / strength) sets the rep ranges and rest periods.
+- **Guided HIIT blocks** — Tabata, 30/30 intervals, an Orangetheory-style
+  tread block, a bodyweight circuit — run on a fullscreen interval timer with
+  beeps, launched from Today or mid-session, and log themselves as minutes.
 - Log weight and reps per set with a rest timer; the app remembers and suggests
   **+5 lb** the next time you hit every rep target, auto-fills your working
   weight across sets, shows warm-up ramp sets computed from the weight you
   actually enter, detects personal records, and suggests today's split from
   what you trained last.
+- After **Finish**: an optional cool-down (3–4 stretches matched to what you
+  trained, with hold timers — skippable), then a summary with a deliberately
+  **conservative calorie estimate** (MET-based; only shown when a bodyweight
+  is logged).
 - Optional **cycle-aware mode** for those who want it (see the science note below).
 - Add exercises mid-workout (search the database or create custom ones — leg
-  press, 5-min HIIT blocks, anything), or start a blank freestyle session.
-- History, weekly streaks, JSON backup export/import. Screen stays awake during
-  a session.
+  press, anything), start a blank freestyle session, or **discard** a session
+  entirely if life happens.
+- History with a read-only **Review** of any past session (same photo cards as
+  a live workout), weekly streak plus a **daily streak** that tolerates up to
+  two rest days, JSON backup export/import. Screen stays awake during a session.
 
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).
