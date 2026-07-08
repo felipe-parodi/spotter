@@ -56,7 +56,28 @@ function loadState() {
   return defaultState();
 }
 
-function save() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
+/* Saves are debounced: serializing a years-long history on every keystroke
+   is wasted work. saveNow() is for moments that must not be lost (finishing
+   a session), and any pending write is flushed when the app is backgrounded. */
+let saveTimer = null;
+
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 250);
+}
+
+function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  localStorage.setItem(LS_KEY, JSON.stringify(S));
+}
+
+function cancelSave() { clearTimeout(saveTimer); saveTimer = null; }
+
+window.addEventListener('pagehide', () => { if (saveTimer) saveNow(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && saveTimer) saveNow();
+});
 
 /* ---------------- helpers ---------------- */
 
@@ -642,7 +663,7 @@ function startWorkout() {
     })),
   });
   S.draft = null;
-  save(); acquireWakeLock(); go('workout');
+  save(); acquireWakeLock(); ensureAudio(); go('workout');
 }
 
 function startFreestyle() {
@@ -651,7 +672,7 @@ function startFreestyle() {
     ex: [],
   };
   S._picker = { q: '' };
-  save(); acquireWakeLock(); go('workout');
+  save(); acquireWakeLock(); ensureAudio(); go('workout');
 }
 
 /* A gentle, low-strain session for rough days — mobility, core, light glute work. */
@@ -756,7 +777,7 @@ function finishWorkout(force) {
   S.history.unshift(entry);
   S.active = null;
   S.lastSummary = entry;
-  stopRest(); releaseWakeLock(); save(); go('cooldown');
+  stopRest(); releaseWakeLock(); saveNow(); go('cooldown');
 }
 
 /* Throw away the active session entirely — even with sets already logged. */
@@ -767,7 +788,7 @@ function discardSession() {
     : 'Discard this session?';
   if (!confirm(msg)) return;
   S.active = null;
-  stopRest(); releaseWakeLock(); save();
+  stopRest(); releaseWakeLock(); saveNow();
   toast('Session discarded.');
   go('today');
 }
@@ -806,6 +827,16 @@ function stopRest() {
   rest = null;
   const bar = $('#restbar');
   if (bar) bar.classList.remove('show');
+}
+
+/* Create/resume the AudioContext inside a user gesture (start of a session),
+   so the first rest/interval beep fires on time instead of paying context
+   startup — and isn't blocked by autoplay policy. */
+function ensureAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) { /* audio unavailable — beeps degrade to vibration */ }
 }
 
 function beep() {
@@ -866,7 +897,7 @@ function startHiitTpl(id) {
   }
   hiitRun = { tpl, idx: 0, end: Date.now() + tpl.seq[0].secs * 1000, paused: false, started: Date.now() };
   stopRest();
-  save(); acquireWakeLock(); go('hiit');
+  save(); acquireWakeLock(); ensureAudio(); go('hiit');
 }
 
 function hiitAdvance() {
@@ -1111,10 +1142,10 @@ function tabbar(current) {
 
 function demoHTML(id, name) {
   if (!HAS_IMG.has(id)) return '';
-  const z = ' data-zoom="' + esc(id) + '" data-zname="' + esc(name) + '"';
+  const z = ' loading="lazy" decoding="async" data-zoom="' + esc(id) + '" data-zname="' + esc(name) + '"';
   return '<div class="demo">' +
-    '<img src="img/' + id + '-0.jpg" alt="' + esc(name) + ' — start" loading="lazy"' + z + ' data-zi="0">' +
-    '<img src="img/' + id + '-1.jpg" alt="' + esc(name) + ' — end" loading="lazy"' + z + ' data-zi="1">' +
+    '<img src="img/' + id + '-0.jpg" alt="' + esc(name) + ' — start"' + z + ' data-zi="0">' +
+    '<img src="img/' + id + '-1.jpg" alt="' + esc(name) + ' — end"' + z + ' data-zi="1">' +
     '</div>';
 }
 
@@ -1316,7 +1347,7 @@ function viewPreview() {
   const goal = GOAL_PARAMS[S.profile.goal] || GOAL_PARAMS.fitness;
   const rows = d.ex.map((e, i) => `
     <div class="ex-row">
-      ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy" data-zoom="' + esc(e.id) + '" data-zname="' + esc(e.name) + '">' : ''}
+      ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy" decoding="async" data-zoom="' + esc(e.id) + '" data-zname="' + esc(e.name) + '">' : ''}
       <div class="ex-row-main">
         <strong>${esc(e.name)}</strong>
         <span class="muted">${e.sets} × ${repText(e)} · rest ${restText(e.rest)} · ${esc(e.eqLabel)}</span>
@@ -1549,7 +1580,7 @@ function pickerHTML() {
       .slice(0, 40);
     const rows = list.map(e => `
       <button class="pick-row" data-a="pick-add" data-id="${e.id}">
-        ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy">' : ''}
+        ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy" decoding="async">' : ''}
         <span><strong>${esc(e.name)}</strong><em>${e.custom ? 'custom' : esc(e.m.join(', '))}</em></span>
       </button>`).join('');
     const hiitRows = HIIT_TEMPLATES
@@ -1677,7 +1708,10 @@ function volTxt(v) { return v >= 10000 ? (v / 1000).toFixed(1) + 'k' : Math.roun
 
 function viewHistory() {
   const st = weekStats();
-  const items = S.history.map((w, i) => {
+  // render the recent page only — a years-long log shouldn't rebuild in full
+  // on every row tap. "Show earlier" extends the window.
+  const shown = S._histShown || 25;
+  const items = S.history.slice(0, shown).map((w, i) => {
     const open = S._openHist === i;
     const editing = S._editHist === i;
     let detail = '';
@@ -1721,6 +1755,7 @@ function viewHistory() {
       <div class="stat"><strong>${st.total}</strong><span>total</span></div>
     </div>
     ${items || '<p class="fine">No sessions yet. Finished workouts land here and drive the weight suggestions.</p>'}
+    ${S.history.length > shown ? '<button class="btn-ghost" data-a="hist-more">Show earlier sessions (' + (S.history.length - shown) + ' more)</button>' : ''}
   </div>
   ${tabbar('history')}`;
 }
@@ -2051,7 +2086,12 @@ document.addEventListener('click', ev => {
       S.sel.groups = S.sel.groups.filter(x => x !== 'full');
       S.sel.groups = S.sel.groups.includes(g) ? S.sel.groups.filter(x => x !== g) : S.sel.groups.concat(g);
     }
-    save(); render();
+    save();
+    // patch in place — a full re-render on every tap flickers and drops taps
+    document.querySelectorAll('[data-a="chip"]').forEach(b =>
+      b.classList.toggle('on', S.sel.groups.includes(b.dataset.g)));
+    const gen = document.querySelector('[data-a="generate"]');
+    if (gen) gen.disabled = !S.sel.groups.length;
   }
 
   else if (a === 'use-split') {
@@ -2155,6 +2195,8 @@ document.addEventListener('click', ev => {
   else if (a === 'rest-skip') stopRest();
   else if (a === 'rest-add') { if (rest) { rest.end += 30000; rest.total += 30; renderRestBar(); } }
 
+  else if (a === 'hist-more') { S._histShown = (S._histShown || 25) + 50; render(); }
+
   else if (a === 'hist-toggle') {
     if (ev.target.closest('input')) return;
     const i = +el.dataset.i;
@@ -2226,6 +2268,7 @@ document.addEventListener('click', ev => {
 
   else if (a === 'reset') {
     if (confirm('Erase your profile and ALL history on this phone? This cannot be undone.')) {
+      cancelSave(); // a pending debounced write must not resurrect the old state
       localStorage.removeItem(LS_KEY);
       S = defaultState();
       applyTheme();
@@ -2376,8 +2419,13 @@ if ('serviceWorker' in navigator) {
       });
     });
   }).catch(() => { /* e.g. plain-HTTP LAN preview — app still works, just no offline cache */ });
+  // Reload when an accepted update takes over — but NOT on the very first
+  // install, where claim() also fires controllerchange and a reload would
+  // wipe in-progress onboarding input.
+  let hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
     if (reloaded) return; reloaded = true; location.reload();
   });
 }
@@ -2387,7 +2435,7 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 
 /* ---------------- boot ---------------- */
 
-delete S._snoozeBackup; S._editHist = -1; S._hiitSheet = null; // transient view state, fresh each launch
+delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; // transient view state, fresh each launch
 applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();

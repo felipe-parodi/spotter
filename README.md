@@ -95,6 +95,10 @@ Each phone that installs it gets its own independent profile and history
 3. Push. Next time a phone opens the app *with internet*, it shows an
    "Update ready → Reload" toast. No internet = keeps working on the old version.
 
+Updates are cheap: the exercise photos (5+ MB) live in a persistent cache that
+survives version bumps, so a deploy only re-downloads the ~60 KB app shell.
+New photos are fetched in the background and stale ones pruned automatically.
+
 ## Files
 
 | File | What it is |
