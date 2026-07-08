@@ -21,9 +21,10 @@ after install — each phone keeps its own profile and history.
   beeps, launched from Today or mid-session, and log themselves as minutes.
 - Log weight and reps per set with a rest timer; the app remembers and suggests
   **+5 lb** the next time you hit every rep target, auto-fills your working
-  weight across sets, shows warm-up ramp sets computed from the weight you
-  actually enter, detects personal records, and suggests today's split from
-  what you trained last.
+  weight across sets, shows warm-up ramp sets **and a per-side plate breakdown**
+  computed from the weight you actually enter, detects personal records, and
+  suggests today's split from what you trained last. Each exercise takes a
+  **persistent note** (seat height, grip, straps).
 - After **Finish**: an optional cool-down (3–4 stretches matched to what you
   trained, with hold timers — skippable), then a summary with a deliberately
   **conservative calorie estimate** (MET-based; only shown when a bodyweight
@@ -33,8 +34,10 @@ after install — each phone keeps its own profile and history.
   press, anything), start a blank freestyle session, or **discard** a session
   entirely if life happens.
 - History with a read-only **Review** of any past session (same photo cards as
-  a live workout), weekly streak plus a **daily streak** that tolerates up to
-  two rest days, JSON backup export/import. Screen stays awake during a session.
+  a live workout) and one-tap **Repeat** that rebuilds it as today's plan with
+  refreshed weights; weekly streak plus a **daily streak** that tolerates up to
+  two rest days; **sets-per-muscle-group bars for the current week** in Trends;
+  JSON backup export/import. Screen stays awake during a session.
 
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).
@@ -112,6 +115,7 @@ New photos are fetched in the background and stale ones pruned automatically.
 | `manifest.webmanifest` | Home-screen install metadata |
 | `img/` | Exercise demo photos (public domain) |
 | `tools/make_icons.py` | Regenerates `icons/` (pure Python, no deps) |
-| `tools/fetch_images.py` | Re-downloads/re-maps demo photos |
+| `tools/fetch_images.py` | Re-downloads/re-maps demo photos (WebP; needs Pillow) |
+| `tools/test/` | Logic, browser E2E, SW-update, and perf tests — see its README |
 
 Data lives in `localStorage` under the key `spotter-v1`.

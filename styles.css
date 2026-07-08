@@ -884,3 +884,46 @@ h2 { font-size: 17px; }
 .set-row.rv { border-radius: var(--r-ctl); background: var(--sunken); }
 .set-row.rv .check { display: none; }
 .workout-screen .btn-danger { margin-top: -6px; }
+
+/* four stat tiles (summary with kcal) wrap 2×2 on narrow phones */
+@media (max-width: 400px) {
+  .stats-row:has(.stat:nth-child(4)) { flex-wrap: wrap; }
+  .stats-row:has(.stat:nth-child(4)) .stat { flex: 1 1 40%; }
+}
+
+/* ---------------- plate calculator & notes ---------------- */
+
+.plate-line {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.plate-line:empty { display: none; }
+
+.exnote input {
+  margin-top: 8px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
+  padding: 9px 12px;
+  font-size: 14px;
+  outline: none;
+}
+.exnote input:focus { border-color: var(--ink); }
+
+/* ---------------- weekly volume bars ---------------- */
+
+.wv { display: flex; flex-direction: column; gap: 7px; }
+.wv-row { display: grid; grid-template-columns: 82px 1fr 26px; gap: 10px; align-items: center; }
+.wv-label { font-size: 13px; font-weight: 700; }
+.wv-bar { height: 8px; border-radius: 100px; background: var(--sunken); overflow: hidden; }
+.wv-fill { height: 100%; border-radius: 100px; background: var(--accent); }
+.wv-n { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* ---------------- reduced motion ---------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
