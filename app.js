@@ -17,6 +17,7 @@ function defaultState() {
     settings: { equipment: Object.fromEntries(EQUIPMENT.map(e => [e.id, true])) },
     history: [],   // finished workouts, newest first
     custom: [],    // user-created exercises
+    notes: {},     // per-exercise notes: {exId: 'seat height 4'}
     bodyLog: [],   // bodyweight entries: {date: ISO, w: number}
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
@@ -44,8 +45,10 @@ function loadState() {
         Object.fromEntries(EQUIPMENT.map(e => [e.id, true])),
         s.settings.equipment || {});
       s.custom = parsed.custom || [];
+      s.notes = parsed.notes || {};
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
       s.bodyLog = parsed.bodyLog || [];
+      delete s.lastSummary; // older versions persisted a copy of history[0]
       // seed the log from an existing single bodyweight so the trend has a start point
       if (!s.bodyLog.length && s.profile && s.profile.bodyweight > 0) {
         s.bodyLog = [{ date: new Date().toISOString(), w: s.profile.bodyweight }];
@@ -56,7 +59,28 @@ function loadState() {
   return defaultState();
 }
 
-function save() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
+/* Saves are debounced: serializing a years-long history on every keystroke
+   is wasted work. saveNow() is for moments that must not be lost (finishing
+   a session), and any pending write is flushed when the app is backgrounded. */
+let saveTimer = null;
+
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 250);
+}
+
+function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  localStorage.setItem(LS_KEY, JSON.stringify(S));
+}
+
+function cancelSave() { clearTimeout(saveTimer); saveTimer = null; }
+
+window.addEventListener('pagehide', () => { if (saveTimer) saveNow(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && saveTimer) saveNow();
+});
 
 /* ---------------- helpers ---------------- */
 
@@ -117,6 +141,69 @@ function weekStats() {
   return { count, streak, total: S.history.length };
 }
 
+/* Daily training streak. Rest days are part of training, so up to two idle
+   days between sessions keep the chain alive; a third breaks it. The count
+   spans first to last session of the current chain, rest days included. */
+function dayStreak() {
+  const days = Array.from(new Set(S.history.map(w => {
+    const d = new Date(w.date); d.setHours(0, 0, 0, 0); return d.getTime();
+  }))).sort((a, b) => b - a);
+  if (!days.length) return 0;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if ((today.getTime() - days[0]) / DAY_MS > 3) return 0;
+  let start = days[0];
+  for (let i = 1; i < days.length; i++) {
+    if ((days[i - 1] - days[i]) / DAY_MS > 3) break;
+    start = days[i];
+  }
+  return Math.round((days[0] - start) / DAY_MS) + 1;
+}
+
+/* ---------------- calories (conservative) ----------------
+   kcal = MET × kg × hours, with deliberately low METs so the number
+   under-promises: strength ≈ 3.0, steady cardio ≈ 5.0, HIIT ≈ 6.0. */
+
+const MET = { strength: 3.0, cardio: 5.0, hiit: 6.0 };
+
+/* Bodyweight in effect on a given date: last log entry at or before it. */
+function bwAt(iso) {
+  const t = new Date(iso).getTime();
+  let w = null;
+  for (const e of S.bodyLog || []) {
+    if (new Date(e.date).getTime() <= t) w = e.w;
+  }
+  if (w == null && S.bodyLog && S.bodyLog.length) w = S.bodyLog[0].w;
+  if (w == null && S.profile) w = S.profile.bodyweight;
+  return w > 0 ? w : null;
+}
+
+function sessionKcal(w) {
+  const bw = bwAt(w.date);
+  if (!bw || !(w.minutes > 0)) return null;
+  const kg = unitLabel() === 'kg' ? bw : bw * KG;
+  let cardio = 0, hiit = 0; // cardio/HIIT entries log minutes per set
+  for (const e of (w.exercises || [])) {
+    const mins = e.sets.reduce((x, s) => x + (s.r || 0), 0);
+    if (e.hiit) hiit += mins;
+    else if (e.cardio) cardio += mins;
+  }
+  cardio = Math.min(cardio, w.minutes);
+  hiit = Math.min(hiit, w.minutes - cardio);
+  const strength = Math.max(0, w.minutes - cardio - hiit);
+  return Math.round((strength * MET.strength + cardio * MET.cardio + hiit * MET.hiit) * kg / 60);
+}
+
+function kcalTxt(w) {
+  const k = sessionKcal(w);
+  return k ? '~' + k + ' kcal' : '';
+}
+
+/* Unit suffix for a logged entry's rep numbers. */
+function timeUnit(e) {
+  if (e.cardio || e.hiit) return ' min';
+  return e.mode === 'time' ? ' sec' : ' reps';
+}
+
 /* ---------------- per-exercise trends ---------------- */
 
 function epley1rm(w, r) { return w * (1 + Math.min(r, 12) / 30); }
@@ -137,10 +224,10 @@ function exerciseSeries(id) {
       est = Math.max(...e.sets.map(s => epley1rm(s.w || 0, s.r || 0)));
     } else {
       val = Math.max(...e.sets.map(s => s.r || 0));
-      sub = val + (e.mode === 'time' ? ' sec' : ' reps');
+      sub = val + timeUnit(e);
     }
     const vol = e.sets.reduce((x, s) => x + (s.w || 0) * (s.r || 0), 0);
-    pts.push({ t: new Date(w.date).getTime(), date: w.date, val, sub, est, vol, weighted, mode: e.mode });
+    pts.push({ t: new Date(w.date).getTime(), date: w.date, val, sub, est, vol, weighted, mode: e.mode, cardio: !!(e.cardio || e.hiit) });
   }
   return pts;
 }
@@ -398,7 +485,7 @@ function lastPerf(exId) {
 
 function suggestFor(ex) {
   const perf = lastPerf(ex.id);
-  const step = incrFor(ex);
+  const step = incrFor(findEx(ex.id) || ex); // snapshots don't carry incr
   const ease = readinessLoad();
   const easeNote = ease < 1 ? ' · lighter today' : '';
   if (!perf) {
@@ -407,13 +494,14 @@ function suggestFor(ex) {
   const detail = perf.sets.map(s => s.r).filter(Boolean).join(', ');
   const lastTxt = perf.topW
     ? 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + (detail ? ' × ' + detail : '')
-    : (detail ? 'Last: ' + detail + (ex.mode === 'time' ? ' sec' : ' reps') : null);
+    : (detail ? 'Last: ' + detail + timeUnit(ex) : null);
   if (perf.allHit && perf.topW && step) {
     const target = ease < 1 ? roundW((perf.topW + step) * ease) : perf.topW + step;
     return { w: target, note: lastTxt + ' — every target hit. Today: ' + fmtW(target) + ' ' + unitLabel() + (ease < 1 ? easeNote : ' ↑'), up: ease >= 1 };
   }
   if (perf.allHit && !step) {
-    return { w: null, note: lastTxt + ' — every target hit. Add ' + (ex.mode === 'time' ? '5–10 sec' : '1–2 reps') + ' ↑', up: true };
+    const bump = (ex.cardio || ex.hiit) ? '2–3 min or a notch of intensity' : ex.mode === 'time' ? '5–10 sec' : '1–2 reps';
+    return { w: null, note: lastTxt + ' — every target hit. Add ' + bump + ' ↑', up: true };
   }
   const w = ease < 1 && perf.topW ? roundW(perf.topW * ease) : perf.topW;
   return { w, note: lastTxt + easeNote, up: false };
@@ -429,7 +517,7 @@ function recentExerciseIds(n) {
 
 function assignParams(ex, minutes) {
   const goal = GOAL_PARAMS[S.profile.goal] || GOAL_PARAMS.fitness;
-  const kind = ex.mode === 'time' ? 'time' : (ex.cmp ? 'cmp' : 'iso');
+  const kind = ex.cardio ? 'cardio' : ex.mode === 'time' ? 'time' : (ex.cmp ? 'cmp' : 'iso');
   const p = goal[kind];
   let sets = p.sets, rest = p.rest;
   if (minutes <= 30) { sets = Math.min(sets, 3); rest = Math.round(rest * 0.8); }
@@ -437,7 +525,10 @@ function assignParams(ex, minutes) {
   return { sets, reps: p.reps.slice(), rest, kind };
 }
 
-function estMinutes(a) { return a.sets * (0.75 + a.rest / 60); }
+function estMinutes(a) {
+  if (a.kind === 'cardio') return a.sets * a.reps[0]; // reps are minutes; budget the low end
+  return a.sets * (0.75 + a.rest / 60);
+}
 
 function musclesFor(groupIds) {
   const gs = UI_GROUPS.filter(g => groupIds.includes(g.id));
@@ -472,7 +563,7 @@ function pickExercise(muscle, usedIds, recent, preferCompound) {
 function snapshot(def, params) {
   return {
     id: def.id, name: def.name, cue: def.cue || '', cmp: !!def.cmp, uni: !!def.uni,
-    mode: def.mode || 'reps',
+    mode: def.mode || 'reps', cardio: !!def.cardio,
     eqLabel: def.custom ? 'Custom' : def.eq.map(t => EQ_LABEL[t]).join(' · '),
     sets: params.sets, reps: params.reps, rest: params.rest,
   };
@@ -486,14 +577,19 @@ function generateWorkout(groupIds, minutes) {
   const picked = [];
   let total = 0;
 
+  const cardioOnly = groupIds.every(g => g === 'cardio');
   for (const muscle of queue) {
     if (picked.length >= 8) break;
     const cmpCount = picked.filter(p => p.cmp).length;
     const preferCompound = cmpCount < Math.max(3, Math.ceil((picked.length + 1) * 0.6));
-    const ex = pickExercise(muscle, usedIds, recent, preferCompound && muscle !== 'core');
+    const ex = pickExercise(muscle, usedIds, recent, preferCompound && muscle !== 'core' && muscle !== 'cardio');
     if (!ex) continue;
+    // cardio joins a strength session as a single finisher block
+    if (ex.cardio && picked.some(p => p.cardio) && !cardioOnly) continue;
+    if (ex.cardio && picked.filter(p => p.cardio).length >= 3) continue;
     const params = assignParams(ex, minutes);
     const est = estMinutes(params);
+    if (ex.cardio && picked.length && total + est > budget + 2) continue;
     if (picked.length >= 3 && total + est > budget + 2) break;
     usedIds.add(ex.id);
     picked.push(Object.assign({}, ex, params));
@@ -501,8 +597,8 @@ function generateWorkout(groupIds, minutes) {
   }
 
   picked.sort((a, b) => {
-    const coreA = a.m.includes('core') ? 1 : 0, coreB = b.m.includes('core') ? 1 : 0;
-    if (coreA !== coreB) return coreA - coreB;
+    const order = x => x.cardio ? 2 : x.m.includes('core') ? 1 : 0;
+    if (order(a) !== order(b)) return order(a) - order(b);
     return (b.cmp ? 1 : 0) - (a.cmp ? 1 : 0);
   });
 
@@ -542,6 +638,33 @@ function warmupFor(groupIds) {
   return bits.join(' · ');
 }
 
+/* Rebuild a past session as today's draft. Exercises and set counts mirror
+   what was actually done; weights come fresh from suggestFor at start, so
+   progression still applies. Guided HIIT blocks restart from their template
+   instead of being cloned. */
+function repeatSession(i) {
+  const w = S.history[i];
+  if (!w) return;
+  const ex = [];
+  for (const e of (w.exercises || [])) {
+    if (e.hiit) continue;
+    const def = findEx(e.id);
+    let entry;
+    if (def) {
+      entry = snapshot(def, assignParams(def, S.sel.minutes || 45));
+    } else {
+      entry = { id: e.id, name: e.name, cue: '', cmp: false, uni: !!e.uni, mode: e.mode || 'reps',
+                cardio: !!e.cardio, eqLabel: 'Custom', sets: e.sets.length,
+                reps: e.targetReps || [8, 12], rest: 60 };
+    }
+    entry.sets = Math.max(1, e.sets.length);
+    ex.push(entry);
+  }
+  if (!ex.length) { toast('Nothing repeatable in that session.'); return; }
+  S.draft = { groups: w.groups, minutes: S.sel.minutes || 45, est: w.minutes, ex, repeatOf: w.date };
+  save(); go('preview');
+}
+
 /* Suggest today's split from what was trained last */
 function suggestSplit() {
   if (!S.history.length) return null;
@@ -560,6 +683,8 @@ function suggestSplit() {
 
 /* ---------------- workout lifecycle ---------------- */
 
+let lastFinished = null; // the just-finished session, for cooldown/summary
+
 function startWorkout() {
   if (!S.draft) return;
   S.active = Object.assign({}, S.draft, {
@@ -570,7 +695,7 @@ function startWorkout() {
     })),
   });
   S.draft = null;
-  save(); acquireWakeLock(); go('workout');
+  save(); acquireWakeLock(); ensureAudio(); go('workout');
 }
 
 function startFreestyle() {
@@ -579,7 +704,7 @@ function startFreestyle() {
     ex: [],
   };
   S._picker = { q: '' };
-  save(); acquireWakeLock(); go('workout');
+  save(); acquireWakeLock(); ensureAudio(); go('workout');
 }
 
 /* A gentle, low-strain session for rough days — mobility, core, light glute work. */
@@ -610,6 +735,7 @@ function setDone(i, j) {
   const s = ex.log[j];
   s.done = !s.done;
   if (s.done) {
+    if (navigator.vibrate) navigator.vibrate(10); // tactile tick
     if (s.w == null && ex.suggest && ex.suggest.w) s.w = ex.suggest.w;
     if (s.r == null) s.r = ex.reps[1];
     const isLastSet = i === S.active.ex.length - 1 && j === ex.log.length - 1;
@@ -636,7 +762,7 @@ function computePRs(entry) {
     const curW = Math.max(...e.sets.map(s => s.w || 0), 0);
     const curR = Math.max(...e.sets.map(s => s.r || 0), 0);
     if (bestW && curW > bestW) prs.push(e.name + ' · ' + fmtW(curW) + ' ' + unitLabel());
-    else if (!bestW && curR > bestR) prs.push(e.name + ' · ' + curR + (e.mode === 'time' ? ' sec' : ' reps'));
+    else if (!bestW && curR > bestR) prs.push(e.name + ' · ' + curR + timeUnit(e));
   }
   return prs;
 }
@@ -672,6 +798,7 @@ function finishWorkout(force) {
     minutes: minutesBetween(a.startedAt, Date.now()),
     exercises: a.ex.map(e => ({
       id: e.id, name: e.name, mode: e.mode, uni: e.uni,
+      cardio: e.cardio || undefined, hiit: e.hiit || undefined,
       targetReps: e.reps,
       sets: e.log.filter(s => s.done).map(s => ({ w: s.w, r: s.r })),
     })).filter(e => e.sets.length),
@@ -682,8 +809,21 @@ function finishWorkout(force) {
   entry.prs = computePRs(entry);
   S.history.unshift(entry);
   S.active = null;
-  S.lastSummary = entry;
-  stopRest(); releaseWakeLock(); save(); go('summary');
+  lastFinished = entry; // transient — summary/cooldown read it this launch only
+  stopRest(); releaseWakeLock(); saveNow(); go('cooldown');
+}
+
+/* Throw away the active session entirely — even with sets already logged. */
+function discardSession() {
+  const done = S.active.ex.reduce((n, e) => n + e.log.filter(s => s.done).length, 0);
+  const msg = done
+    ? 'Discard this session and its ' + done + ' logged set' + (done === 1 ? '' : 's') + '? Nothing will be saved.'
+    : 'Discard this session?';
+  if (!confirm(msg)) return;
+  S.active = null;
+  stopRest(); releaseWakeLock(); saveNow();
+  toast('Session discarded.');
+  go('today');
 }
 
 /* ---------------- wake lock (screen stays on mid-workout) ---------------- */
@@ -703,7 +843,11 @@ function releaseWakeLock() {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && S.active) acquireWakeLock();
+  if (document.visibilityState !== 'visible') return;
+  if (S.active) acquireWakeLock();
+  // iOS suspends the AudioContext in the background — resume it so the next
+  // rest/interval beep actually sounds
+  if (S.active || hiitRun) ensureAudio();
 });
 
 /* ---------------- rest timer ---------------- */
@@ -711,8 +855,8 @@ document.addEventListener('visibilitychange', () => {
 let rest = null; // {end, total, label}
 let audioCtx = null;
 
-function startRest(sec, label) {
-  rest = { end: Date.now() + sec * 1000, total: sec, label };
+function startRest(sec, label, stretch) {
+  rest = { end: Date.now() + sec * 1000, total: sec, label, stretch: !!stretch };
   renderRestBar();
 }
 
@@ -720,6 +864,31 @@ function stopRest() {
   rest = null;
   const bar = $('#restbar');
   if (bar) bar.classList.remove('show');
+}
+
+/* Create/resume the AudioContext inside a user gesture (start of a session),
+   so the first rest/interval beep fires on time instead of paying context
+   startup — and isn't blocked by autoplay policy. */
+function ensureAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) { /* audio unavailable — beeps degrade to vibration */ }
+}
+
+/* Single soft tick — the 3-2-1 pre-interval heads-up. */
+function blip() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 660; o.type = 'sine';
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(0.1, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t + 0.12);
+  } catch (e) { /* audio unavailable */ }
 }
 
 function beep() {
@@ -744,10 +913,15 @@ setInterval(() => {
     const el = $('#elapsed');
     if (el) el.textContent = minutesBetween(S.active.startedAt, Date.now()) + ' min';
   }
+  if (route === 'today' && S.active) {
+    const el = $('#resume-sub');
+    if (el) el.textContent = groupLabels(S.active.groups) + ' · started ' + minutesBetween(S.active.startedAt, Date.now()) + ' min ago';
+  }
+  hiitTick();
   if (!rest) return;
   const left = Math.ceil((rest.end - Date.now()) / 1000);
   if (left <= 0) {
-    beep(); toast('Rest over.'); stopRest();
+    beep(); toast(rest.stretch ? 'Stretch done — switch or move on.' : 'Rest over.'); stopRest();
     return;
   }
   renderRestBar(left);
@@ -759,8 +933,104 @@ function renderRestBar(left) {
   if (left == null) left = Math.ceil((rest.end - Date.now()) / 1000);
   const pct = Math.max(0, Math.min(1, left / rest.total));
   bar.classList.add('show');
+  bar.querySelector('.rest-label').textContent = rest.stretch ? rest.label : 'Rest';
   bar.querySelector('.rest-time').textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
   bar.querySelector('.rest-fill').style.width = (pct * 100) + '%';
+}
+
+/* ---------------- HIIT interval runner ----------------
+   Guided work/rest sequences from HIIT_TEMPLATES. Transient (not persisted):
+   if the app is killed mid-block the block is lost, the session survives. */
+
+let hiitRun = null; // {tpl, idx, end, paused, left, started}
+
+function startHiitTpl(id) {
+  const tpl = HIIT_TEMPLATES.find(t => t.id === id);
+  if (!tpl) return;
+  S._picker = null; S._hiitSheet = null;
+  if (!S.active) {
+    S.active = { startedAt: Date.now(), groups: ['hiit'], minutes: 30, est: 0, ex: [] };
+  }
+  hiitRun = { tpl, idx: 0, end: Date.now() + tpl.seq[0].secs * 1000, paused: false, started: Date.now() };
+  stopRest();
+  save(); acquireWakeLock(); ensureAudio(); go('hiit');
+}
+
+/* Advance to the next interval. behindSec > 0 means the clock ran past the
+   boundary (the browser throttles timers in the background), so fast-forward
+   through every interval that fully elapsed instead of restarting one. */
+function hiitAdvance(behindSec) {
+  let behind = Math.max(0, behindSec || 0);
+  const seq = hiitRun.tpl.seq;
+  for (;;) {
+    hiitRun.idx++;
+    if (hiitRun.idx >= seq.length) { finishHiit(false); return; }
+    const secs = seq[hiitRun.idx].secs;
+    if (behind < secs) { hiitRun.end = Date.now() + (secs - behind) * 1000; break; }
+    behind -= secs;
+  }
+  render();
+}
+
+/* Log the block into the active session as one timed entry (minutes). */
+function finishHiit(early) {
+  const mins = Math.max(1, Math.round((Date.now() - hiitRun.started) / 60000));
+  const tpl = hiitRun.tpl;
+  hiitRun = null;
+  S.active.ex.push({
+    id: 'hiit-' + tpl.id, name: tpl.name, cue: '', cmp: false, uni: false,
+    mode: 'time', hiit: true, eqLabel: 'HIIT block',
+    sets: 1, reps: [mins, mins], rest: 0,
+    log: [{ w: null, r: mins, done: true }],
+  });
+  save();
+  beep();
+  toast((early ? 'Block ended early — ' : 'HIIT block done — ') + mins + ' min logged.');
+  go('workout');
+}
+
+function fmtClock(sec) { return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); }
+
+/* Seconds left in the whole block, given seconds left in this interval. */
+function hiitTotalLeft(left) {
+  let s = left;
+  for (let i = hiitRun.idx + 1; i < hiitRun.tpl.seq.length; i++) s += hiitRun.tpl.seq[i].secs;
+  return s;
+}
+
+function hiitTick() {
+  if (!hiitRun || hiitRun.paused || route !== 'hiit') return;
+  const left = Math.ceil((hiitRun.end - Date.now()) / 1000);
+  if (left <= 0) { beep(); hiitAdvance(-left); return; }
+  if (left <= 3 && hiitRun.lastBlip !== left) { hiitRun.lastBlip = left; blip(); } // 3-2-1 heads-up
+  const el = $('#hiit-time');
+  if (el) el.textContent = fmtClock(left);
+  const tot = $('#hiit-total');
+  if (tot) tot.textContent = fmtClock(hiitTotalLeft(left)) + ' left in block';
+  const fill = $('#hiit-fill');
+  if (fill) fill.style.width = (100 * (1 - left / hiitRun.tpl.seq[hiitRun.idx].secs)) + '%';
+}
+
+function viewHiit() {
+  if (!hiitRun) { route = S.active ? 'workout' : 'today'; return (S.active ? viewWorkout : viewToday)(); }
+  const t = hiitRun.tpl;
+  const step = t.seq[hiitRun.idx];
+  const next = t.seq[hiitRun.idx + 1];
+  const left = Math.max(0, Math.ceil(((hiitRun.paused ? hiitRun.left + Date.now() : hiitRun.end) - Date.now()) / 1000));
+  return `
+  <div class="screen center hiit${step.hard ? ' hard' : ''}">
+    <div class="kicker">${esc(t.name)} · ${hiitRun.idx + 1} of ${t.seq.length}</div>
+    <h1 class="hiit-label">${esc(step.label)}</h1>
+    <div class="hiit-time" id="hiit-time">${Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0')}</div>
+    <div class="hiit-bar"><div class="hiit-fill" id="hiit-fill"></div></div>
+    <p class="muted">${next ? 'Next: ' + esc(next.label) + ' · ' + next.secs + 's' : 'Last one — finish strong.'}</p>
+    <p class="muted small" id="hiit-total">${fmtClock(hiitTotalLeft(left))} left in block</p>
+    <div class="row-btns" style="width:100%">
+      <button class="btn-ghost" data-a="hiit-pause">${hiitRun.paused ? 'Resume' : 'Pause'}</button>
+      <button class="btn-ghost" data-a="hiit-skip">Skip ›</button>
+    </div>
+    <button class="btn-danger" data-a="hiit-end">End block early</button>
+  </div>`;
 }
 
 /* ---------------- toast ---------------- */
@@ -772,8 +1042,164 @@ function toast(msg, action, onAction) {
   t._onAction = onAction || null;
   t.classList.add('show');
   clearTimeout(toastTimer);
-  if (!action) toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+  // action toasts linger longer but still clear themselves — an unanswered
+  // "Update ready" shouldn't sit over the header forever
+  toastTimer = setTimeout(() => t.classList.remove('show'), action ? 12000 : 3200);
 }
+
+/* ---------------- image lightbox ----------------
+   Fullscreen viewer for exercise photos: pinch/double-tap to zoom, drag to
+   pan, swipe or arrows to move between frames (incl. alternate photos).
+   Lives in its own #lightbox element so re-renders don't tear it down. */
+
+function exFrames(id) {
+  const frames = [];
+  if (HAS_IMG.has(id)) frames.push(
+    { src: 'img/' + id + '-0.webp', cap: 'start' },
+    { src: 'img/' + id + '-1.webp', cap: 'end' });
+  if (typeof IMG_ALT_IDS !== 'undefined' && IMG_ALT_IDS.includes(id)) frames.push(
+    { src: 'img/' + id + '-alt-0.webp', cap: 'alt view · start' },
+    { src: 'img/' + id + '-alt-1.webp', cap: 'alt view · end' });
+  return frames;
+}
+
+let lb = null; // {frames, i, scale, tx, ty}
+
+function openLightbox(id, name, start) {
+  const frames = exFrames(id);
+  if (!frames.length) return;
+  lb = { frames, i: Math.min(start || 0, frames.length - 1), scale: 1, tx: 0, ty: 0 };
+  const el = $('#lightbox');
+  el.innerHTML = `
+    <div class="lb-top"><span class="lb-name">${esc(name || '')}</span><button class="lb-close" data-lb="close" aria-label="Close">✕</button></div>
+    <div class="lb-stage"><img class="lb-img" draggable="false" alt="${esc(name || '')}"></div>
+    <div class="lb-nav">
+      <button class="lb-arrow" data-lb="prev">‹</button>
+      <span class="lb-cap"></span>
+      <button class="lb-arrow" data-lb="next">›</button>
+    </div>
+    <p class="lb-hint">pinch or double-tap to zoom · swipe for more frames</p>`;
+  el.classList.add('show');
+  bindLightboxGestures(el.querySelector('.lb-stage'));
+  lbUpdate();
+}
+
+function closeLightbox() {
+  lb = null;
+  const el = $('#lightbox');
+  el.classList.remove('show');
+  el.innerHTML = '';
+}
+
+function lbStep(d) {
+  if (!lb) return;
+  const n = lb.i + d;
+  if (n < 0 || n >= lb.frames.length) return;
+  lb.i = n;
+  lbUpdate();
+}
+
+function lbUpdate() {
+  if (!lb) return;
+  const img = document.querySelector('#lightbox .lb-img');
+  const f = lb.frames[lb.i];
+  if (img.getAttribute('src') !== f.src) { img.src = f.src; lb.scale = 1; lb.tx = 0; lb.ty = 0; }
+  lbApply();
+  document.querySelector('#lightbox .lb-cap').textContent = f.cap + ' · ' + (lb.i + 1) + '/' + lb.frames.length;
+  document.querySelector('#lightbox [data-lb="prev"]').disabled = lb.i === 0;
+  document.querySelector('#lightbox [data-lb="next"]').disabled = lb.i === lb.frames.length - 1;
+}
+
+function lbApply() {
+  const img = document.querySelector('#lightbox .lb-img');
+  const stage = document.querySelector('#lightbox .lb-stage');
+  if (!img || !stage || !lb) return;
+  const maxX = Math.max(0, (lb.scale - 1) * stage.clientWidth / 2);
+  const maxY = Math.max(0, (lb.scale - 1) * stage.clientHeight / 2);
+  lb.tx = Math.max(-maxX, Math.min(maxX, lb.tx));
+  lb.ty = Math.max(-maxY, Math.min(maxY, lb.ty));
+  img.style.transform = 'translate(' + lb.tx + 'px, ' + lb.ty + 'px) scale(' + lb.scale + ')';
+}
+
+function bindLightboxGestures(stage) {
+  const ptrs = new Map();
+  let startDist = 0, startScale = 1, lastTap = 0, lastX = 0, lastY = 0, swipeX = null;
+
+  stage.addEventListener('pointerdown', e => {
+    stage.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      startDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      startScale = lb.scale;
+      swipeX = null;
+    } else if (ptrs.size === 1) {
+      lastX = e.clientX; lastY = e.clientY;
+      swipeX = lb.scale === 1 ? e.clientX : null;
+    }
+  });
+
+  stage.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId) || !lb) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      lb.scale = Math.max(1, Math.min(4, startScale * Math.hypot(a.x - b.x, a.y - b.y) / startDist));
+      lbApply();
+    } else if (ptrs.size === 1 && lb.scale > 1) {
+      lb.tx += e.clientX - lastX;
+      lb.ty += e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      lbApply();
+    }
+  });
+
+  const up = e => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    if (!lb || ptrs.size) return;
+    if (swipeX != null && Math.abs(e.clientX - swipeX) > 48) { // swipe → next/prev frame
+      lbStep(e.clientX < swipeX ? 1 : -1);
+      swipeX = null;
+      return;
+    }
+    const now = Date.now();
+    if (now - lastTap < 320) { // double-tap toggles zoom, centered on the tap
+      if (lb.scale > 1) {
+        lb.scale = 1; lb.tx = 0; lb.ty = 0;
+      } else {
+        const r = stage.getBoundingClientRect();
+        lb.scale = 2.5;
+        lb.tx = -(e.clientX - (r.left + r.width / 2)) * (lb.scale - 1);
+        lb.ty = -(e.clientY - (r.top + r.height / 2)) * (lb.scale - 1);
+      }
+      lbApply();
+      lastTap = 0;
+    } else lastTap = now;
+    if (lb.scale <= 1.02) { lb.scale = 1; lb.tx = 0; lb.ty = 0; lbApply(); }
+  };
+  stage.addEventListener('pointerup', up);
+  stage.addEventListener('pointercancel', up);
+}
+
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('[data-lb]');
+  if (b) {
+    const k = b.dataset.lb;
+    if (k === 'close') closeLightbox();
+    else if (k === 'prev') lbStep(-1);
+    else if (k === 'next') lbStep(1);
+    return;
+  }
+  if (lb && ev.target.id === 'lightbox') closeLightbox(); // tap the backdrop
+});
+
+document.addEventListener('keydown', ev => {
+  if (!lb) return;
+  if (ev.key === 'Escape') closeLightbox();
+  else if (ev.key === 'ArrowLeft') lbStep(-1);
+  else if (ev.key === 'ArrowRight') lbStep(1);
+});
 
 /* ---------------- views ---------------- */
 
@@ -788,6 +1214,7 @@ function render() {
     onboard: viewOnboard, today: viewToday, preview: viewPreview,
     workout: viewWorkout, summary: viewSummary, history: viewHistory,
     trends: viewTrends, trend: viewTrend, bw: viewBodyweight, profile: viewProfile,
+    cooldown: viewCooldown, review: viewReview, hiit: viewHiit,
   };
   app.innerHTML = (views[route] || viewToday)();
 }
@@ -808,9 +1235,10 @@ function tabbar(current) {
 
 function demoHTML(id, name) {
   if (!HAS_IMG.has(id)) return '';
+  const z = ' loading="lazy" decoding="async" data-zoom="' + esc(id) + '" data-zname="' + esc(name) + '"';
   return '<div class="demo">' +
-    '<img src="img/' + id + '-0.jpg" alt="' + esc(name) + ' — start" loading="lazy">' +
-    '<img src="img/' + id + '-1.jpg" alt="' + esc(name) + ' — end" loading="lazy">' +
+    '<img src="img/' + id + '-0.webp" alt="' + esc(name) + ' — start"' + z + ' data-zi="0">' +
+    '<img src="img/' + id + '-1.webp" alt="' + esc(name) + ' — end"' + z + ' data-zi="1">' +
     '</div>';
 }
 
@@ -870,11 +1298,12 @@ function viewToday() {
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const st = weekStats();
+  const ds = dayStreak();
   const dateLine = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
   const resume = S.active ? `
     <button class="card resume" data-a="nav" data-r="workout">
       <div><strong>Session in progress</strong>
-      <span class="muted">${esc(groupLabels(S.active.groups))} · started ${minutesBetween(S.active.startedAt, Date.now())} min ago</span></div>
+      <span class="muted" id="resume-sub">${esc(groupLabels(S.active.groups))} · started ${minutesBetween(S.active.startedAt, Date.now())} min ago</span></div>
       <span class="chev">›</span>
     </button>` : '';
   const chips = UI_GROUPS.map(g =>
@@ -892,7 +1321,7 @@ function viewToday() {
     <header class="top">
       <div><div class="kicker">${esc(dateLine)}</div>
       <h1>${greet}${p.name ? ', ' + esc(p.name) : ''}</h1>
-      <p class="muted small">${st.count} session${st.count === 1 ? '' : 's'} this week${st.streak > 1 ? ' · ' + st.streak + '-week streak' : ''}</p></div>
+      <p class="muted small">${st.count} session${st.count === 1 ? '' : 's'} this week${ds >= 2 ? ' · 🔥 ' + ds + '-day streak' : st.streak > 1 ? ' · ' + st.streak + '-week streak' : ''}</p></div>
     </header>
     ${resume}
     ${backupBanner()}
@@ -908,15 +1337,36 @@ function viewToday() {
         ${dumbbellSVG()} Build workout
       </button>
     </section>
-    <button class="btn-ghost" data-a="freestyle">Blank session — add exercises as you go</button>
+    <div class="row-btns">
+      <button class="btn-ghost" data-a="freestyle">Blank session</button>
+      <button class="btn-ghost" data-a="hiit-menu">Guided HIIT</button>
+    </div>
     ${st.total ? '' : '<p class="fine">Pick muscle groups and a time. Spotter builds the plan from what your gym has.</p>'}
   </div>
+  ${S._hiitSheet ? hiitSheetHTML() : ''}
   ${tabbar('today')}`;
+}
+
+function hiitSheetHTML() {
+  const rows = HIIT_TEMPLATES.map(t => `
+    <button class="pick-row" data-a="hiit-start" data-id="${t.id}">
+      <span><strong>${esc(t.name)}</strong><em>${esc(t.desc)}</em></span>
+    </button>`).join('');
+  return `
+  <div class="overlay" data-a="hiit-close">
+    <div class="sheet" data-stop>
+      <div class="sheet-head"><h2>Guided HIIT block</h2>
+      <button class="icon-btn" data-a="hiit-close">✕</button></div>
+      <p class="muted small">Timed intervals with beeps — the screen tells you when to push and when to breathe. The block logs itself when it ends.</p>
+      <div class="pick-list">${rows}</div>
+    </div>
+  </div>`;
 }
 
 function groupLabels(ids) {
   if (ids.includes('freestyle')) return 'Freestyle';
   if (ids.includes('restorative')) return 'Restorative';
+  if (ids.includes('hiit')) return 'HIIT';
   const labels = UI_GROUPS.filter(g => ids.includes(g.id)).map(g => g.label);
   return labels.length ? labels.join(' + ') : 'Session';
 }
@@ -990,10 +1440,10 @@ function viewPreview() {
   const goal = GOAL_PARAMS[S.profile.goal] || GOAL_PARAMS.fitness;
   const rows = d.ex.map((e, i) => `
     <div class="ex-row">
-      ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy">' : ''}
+      ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.webp" alt="" loading="lazy" decoding="async" data-zoom="' + esc(e.id) + '" data-zname="' + esc(e.name) + '">' : ''}
       <div class="ex-row-main">
         <strong>${esc(e.name)}</strong>
-        <span class="muted">${e.sets} × ${repText(e)} · rest ${restText(e.rest)} · ${esc(e.eqLabel)}</span>
+        <span class="muted">${setsRepsText(e)}</span>
       </div>
       <button class="icon-btn" data-a="swap" data-i="${i}" title="Swap exercise">⇄</button>
     </div>`).join('');
@@ -1004,6 +1454,7 @@ function viewPreview() {
       <div><h1>${esc(groupLabels(d.groups))}</h1>
       <p class="muted small">${d.restorative ? 'Gentle & low-impact' : goal.label} · about ${d.est} min · ${d.ex.length} exercises</p></div>
     </header>
+    ${d.repeatOf ? '<div class="hint">Repeat of ' + esc(fmtDate(d.repeatOf)) + ' — same exercises and sets, weights refreshed from your latest numbers.</div>' : ''}
     ${d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups)) + '</span></div>'}
     <div class="card list">${rows}</div>
     <div class="row-btns">
@@ -1013,8 +1464,16 @@ function viewPreview() {
   </div>`;
 }
 
+/* "3 × 8–12 · rest 1½ min · Dumbbells" — cardio drops the pointless
+   "1 ×" and rest text. */
+function setsRepsText(e) {
+  if ((e.cardio || e.hiit) && e.sets === 1) return repText(e) + ' · ' + esc(e.eqLabel);
+  return e.sets + ' × ' + repText(e) + ' · rest ' + restText(e.rest) + ' · ' + esc(e.eqLabel);
+}
+
 function repText(e) {
   const r = e.reps[0] === e.reps[1] ? e.reps[0] : e.reps[0] + '–' + e.reps[1];
+  if (e.cardio || e.hiit) return r + ' min';
   return e.mode === 'time' ? r + ' sec' : r + (e.uni ? ' / side' : '');
 }
 
@@ -1042,6 +1501,7 @@ function viewWorkout() {
     ${cards}
     <button class="add-ex" data-a="open-picker">＋ Add exercise</button>
     ${a.ex.length ? '<button class="btn-primary big" data-a="finish">Finish session</button>' : ''}
+    <button class="btn-danger" data-a="discard">Discard session</button>
     <div style="height:90px"></div>
   </div>
   ${S._picker ? pickerHTML() : ''}
@@ -1084,7 +1544,7 @@ function exerciseCard(e, i) {
       <div>
         <div class="ex-num">${i + 1} of ${S.active.ex.length}${e.cmp ? ' · compound' : ''}</div>
         <h2>${esc(e.name)}</h2>
-        <div class="muted small">${e.sets} × ${repText(e)} · rest ${restText(e.rest)} · ${esc(e.eqLabel)}</div>
+        <div class="muted small">${setsRepsText(e)}</div>
       </div>
       ${canSwap ? '<button class="icon-btn" data-a="swap" data-i="' + i + '" title="Swap">⇄</button>' : ''}
       <button class="icon-btn" data-a="rm-ex" data-i="${i}" title="Remove">✕</button>
@@ -1093,9 +1553,11 @@ function exerciseCard(e, i) {
     ${sugg.note ? '<div class="sugg' + (sugg.up ? ' up' : '') + '">' + esc(sugg.note) + '</div>' : ''}
     ${e.cue ? '<p class="cue">' + esc(e.cue) + '</p>' : ''}
     ${howtoHTML(e.id)}
+    ${noteHTML(e.id)}
     ${warmupSetsHTML(e, i)}
+    ${plateLineHTML(e)}
     <div class="set-grid">
-      <div class="set-head"><span>Set</span><span>${e.mode === 'time' || !weightApplies(e) ? '' : 'Weight (' + unitLabel() + ')'}</span><span>${e.mode === 'time' ? 'Seconds' : 'Reps'}</span><span></span></div>
+      <div class="set-head"><span>Set</span><span>${e.mode === 'time' || !weightApplies(e) ? '' : 'Weight (' + unitLabel() + ')'}</span><span>${(e.cardio || e.hiit) ? 'Minutes' : e.mode === 'time' ? 'Seconds' : 'Reps'}</span><span></span></div>
       ${rows}
     </div>
     <button class="add-set" data-a="add-set" data-i="${i}">＋ add set</button>
@@ -1117,6 +1579,48 @@ function setRow(e, i, s, j) {
       <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
   </div>`;
+}
+
+/* Per-exercise note — machine settings, grip, "use straps". Lives outside
+   history so it always reflects the latest setup. */
+function noteHTML(id) {
+  const note = (S.notes || {})[id] || '';
+  return `<details class="howto exnote"><summary>${note ? 'Note · ' + esc(note.length > 34 ? note.slice(0, 34) + '…' : note) : 'Add a note'}</summary>
+    <input type="text" data-f="exnote" data-id="${esc(id)}" value="${esc(note)}" placeholder="seat height, grip, straps…" autocomplete="off"></details>`;
+}
+
+/* Heaviest weight in play for an exercise: entered sets first, else the suggestion. */
+function workingWeight(e) {
+  const entered = e.log.map(s => s.w).filter(w => typeof w === 'number' && w > 0);
+  return entered.length ? Math.max(...entered) : (e.suggest && e.suggest.w) || null;
+}
+
+/* Per-side plate breakdown for barbell lifts (standard 45 lb / 20 kg bar). */
+function plateText(total) {
+  const kg = unitLabel() === 'kg';
+  const bar = kg ? 20 : 45;
+  if (!(total >= bar)) return null;
+  if (total === bar) return 'Empty bar';
+  let side = (total - bar) / 2;
+  const sizes = kg ? [25, 20, 15, 10, 5, 2.5, 1.25] : [45, 35, 25, 10, 5, 2.5];
+  const out = [];
+  for (const p of sizes) while (side >= p - 0.001) { out.push(fmtW(p)); side -= p; }
+  if (!out.length) return null;
+  return 'Plates: ' + out.join(' + ') + ' per side' + (side > 0.01 ? ' (+' + fmtW(side * 2) + ' odd)' : '');
+}
+
+function plateLineHTML(e) {
+  const def = findEx(e.id);
+  if (!def || !def.eq.includes('barbell')) return '';
+  const w = workingWeight(e);
+  return '<div class="plate-line">' + (w ? esc(plateText(w) || '') : '') + '</div>';
+}
+
+function refreshPlates(i) {
+  const line = document.querySelector('#ex-' + i + ' .plate-line');
+  if (!line) return;
+  const w = workingWeight(S.active.ex[i]);
+  line.textContent = (w && plateText(w)) || '';
 }
 
 function howtoHTML(id) {
@@ -1149,10 +1653,7 @@ function autofillWeight(i, j) {
 function refreshWarmup(i) {
   const line = document.querySelector('#ex-' + i + ' .warmup-line');
   if (!line) return;
-  const ex = S.active.ex[i];
-  const entered = ex.log.map(s => s.w).filter(w => typeof w === 'number' && w > 0);
-  const work = entered.length ? Math.max(...entered) : (ex.suggest && ex.suggest.w);
-  line.innerHTML = warmupInner(work);
+  line.innerHTML = warmupInner(workingWeight(S.active.ex[i]));
 }
 
 /* Update just the touched row + header, so inputs elsewhere keep focus/state */
@@ -1221,13 +1722,20 @@ function pickerHTML() {
       .slice(0, 40);
     const rows = list.map(e => `
       <button class="pick-row" data-a="pick-add" data-id="${e.id}">
-        ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.jpg" alt="" loading="lazy">' : ''}
+        ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.webp" alt="" loading="lazy" decoding="async">' : ''}
         <span><strong>${esc(e.name)}</strong><em>${e.custom ? 'custom' : esc(e.m.join(', '))}</em></span>
+      </button>`).join('');
+    const hiitRows = HIIT_TEMPLATES
+      .filter(t => !q || t.name.toLowerCase().includes(q) || 'hiit'.includes(q))
+      .map(t => `
+      <button class="pick-row" data-a="hiit-start" data-id="${t.id}">
+        <span><strong>⚡ ${esc(t.name)}</strong><em>guided HIIT · ${esc(t.desc)}</em></span>
       </button>`).join('');
     body = `
     <input type="text" id="picker-q" placeholder="Search exercises…" value="${esc(p.q || '')}" autocomplete="off">
     <div class="pick-list">
       ${rows || '<p class="fine">Nothing matches.</p>'}
+      ${hiitRows}
       <button class="pick-row pick-create" data-a="picker-create">
         <span><strong>＋ Create ${q ? '“' + esc(p.q.trim()) + '”' : 'a custom exercise'}</strong><em>anything — machines, HIIT blocks, stretches</em></span>
       </button>
@@ -1262,25 +1770,77 @@ function createCustom() {
 /* ----- summary ----- */
 
 function viewSummary() {
-  const w = S.lastSummary;
+  const w = lastFinished;
   if (!w) { route = 'today'; return viewToday(); }
   const ups = w.exercises.filter(e => {
     const t = e.targetReps;
     return t && e.sets.length && e.sets.every(s => (s.r || 0) >= t[1]);
   });
+  const kcal = sessionKcal(w);
+  const ds = dayStreak();
   return `
   <div class="screen center">
     <div class="kicker">${esc(fmtDate(w.date))}</div>
     <h1>Session logged.</h1>
-    <p class="muted">${esc(groupLabels(w.groups))}</p>
+    <p class="muted">${esc(groupLabels(w.groups))}${ds >= 2 ? ' · 🔥 ' + ds + '-day streak' : ''}</p>
     <div class="stats-row">
       <div class="stat"><strong>${w.minutes}</strong><span>minutes</span></div>
       <div class="stat"><strong>${w.setCount}</strong><span>sets</span></div>
       <div class="stat"><strong>${w.volume ? (w.volume >= 10000 ? (w.volume / 1000).toFixed(1) + 'k' : Math.round(w.volume)) : '—'}</strong><span>${unitLabel()} lifted</span></div>
+      ${kcal ? '<div class="stat"><strong>~' + kcal + '</strong><span>kcal</span></div>' : ''}
     </div>
     ${w.prs && w.prs.length ? '<div class="pr-note"><strong>Personal record' + (w.prs.length > 1 ? 's' : '') + ':</strong> ' + esc(w.prs.join(' · ')) + '</div>' : ''}
     ${ups.length ? '<div class="pr-note" style="border-color:var(--line);background:var(--sunken)">Every rep target hit on ' + esc(ups.map(e => e.name).join(', ')) + ' — next session moves up.</div>' : ''}
     <button class="btn-primary big" data-a="nav" data-r="today">Done</button>
+  </div>`;
+}
+
+/* ----- cool-down (optional, between finish and summary) ----- */
+
+/* 3–4 stretches matched to the muscles the finished session actually hit. */
+function cooldownFor(entry) {
+  const trained = new Set();
+  for (const e of (entry.exercises || [])) {
+    const def = findEx(e.id);
+    if (def) def.m.concat(def.m2 || []).forEach(m => trained.add(m));
+    if (e.hiit) ['quads', 'chest', 'core', 'calves', 'cardio'].forEach(m => trained.add(m));
+  }
+  const hits = STRETCHES.filter(s => s.m.some(m => trained.has(m)));
+  const rest = STRETCHES.filter(s => !hits.includes(s));
+  return hits.concat(rest).slice(0, 4);
+}
+
+function viewCooldown() {
+  const w = lastFinished;
+  if (!w) { route = 'today'; return viewToday(); }
+  const rows = cooldownFor(w).map(s => `
+    <div class="ex-row">
+      <div class="ex-row-main">
+        <strong>${esc(s.name)}</strong>
+        <span class="muted">${s.secs} sec${s.uni ? ' / side' : ''} · ${esc(s.cue)}</span>
+      </div>
+      <button class="icon-btn stretch-go" data-a="stretch-timer" data-secs="${s.secs}" data-name="${esc(s.name)}" title="Start hold timer">${s.secs}s</button>
+    </div>`).join('');
+  return `
+  <div class="screen">
+    <header class="top">
+      <div><div class="kicker">Nice work</div><h1>Cool down?</h1>
+      <p class="muted small">Three minutes of easy stretching while your heart rate settles. Tap a timer, hold, breathe.</p></div>
+    </header>
+    <div class="card list">${rows}</div>
+    <div class="row-btns">
+      <button class="btn-ghost" data-a="cooldown-done">Skip</button>
+      <button class="btn-primary" data-a="cooldown-done">Done — see summary</button>
+    </div>
+  </div>
+  <div id="restbar" class="restbar">
+    <div class="rest-fill"></div>
+    <div class="rest-inner">
+      <span class="rest-label">Hold</span>
+      <span class="rest-time">0:00</span>
+      <button class="rest-btn" data-a="rest-add">+30s</button>
+      <button class="rest-btn" data-a="rest-skip">Skip</button>
+    </div>
   </div>`;
 }
 
@@ -1290,7 +1850,10 @@ function volTxt(v) { return v >= 10000 ? (v / 1000).toFixed(1) + 'k' : Math.roun
 
 function viewHistory() {
   const st = weekStats();
-  const items = S.history.map((w, i) => {
+  // render the recent page only — a years-long log shouldn't rebuild in full
+  // on every row tap. "Show earlier" extends the window.
+  const shown = S._histShown || 25;
+  const items = S.history.slice(0, shown).map((w, i) => {
     const open = S._openHist === i;
     const editing = S._editHist === i;
     let detail = '';
@@ -1299,8 +1862,10 @@ function viewHistory() {
         '<div class="hist-ex"><span>' + esc(e.name) + '</span><span class="muted">' +
         e.sets.map(s => (s.w ? fmtW(s.w) + '×' : '') + (s.r || '?')).join('  ') + '</span></div>'
       ).join('') +
-      '<div class="hist-actions"><button class="linkbtn" data-a="hist-edit" data-i="' + i + '">Edit</button>' +
-      '<button class="linkbtn danger" data-a="hist-del" data-i="' + i + '">Delete session</button></div></div>';
+      '<div class="hist-actions"><button class="linkbtn" data-a="hist-review" data-i="' + i + '">Review</button>' +
+      '<button class="linkbtn" data-a="hist-repeat" data-i="' + i + '">Repeat</button>' +
+      '<button class="linkbtn" data-a="hist-edit" data-i="' + i + '">Edit</button>' +
+      '<button class="linkbtn danger" data-a="hist-del" data-i="' + i + '">Delete</button></div></div>';
     } else if (editing) {
       detail = '<div class="hist-detail" data-stop>' + w.exercises.map((e, ei) =>
         '<div class="edit-ex"><strong>' + esc(e.name) + '</strong>' +
@@ -1318,7 +1883,7 @@ function viewHistory() {
     <div class="card hist${open ? ' open' : ''}"${editing ? '' : ' data-a="hist-toggle" data-i="' + i + '"'}>
       <div class="hist-row"${editing ? ' data-a="hist-toggle" data-i="' + i + '"' : ''}>
         <div><strong>${esc(groupLabels(w.groups))}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
-        <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}</span></div>
+        <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${sessionKcal(w) ? ' · ' + kcalTxt(w) : ''}</span></div>
         <span class="chev">${open ? '⌄' : '›'}</span>
       </div>
       ${detail}
@@ -1333,11 +1898,100 @@ function viewHistory() {
       <div class="stat"><strong>${st.total}</strong><span>total</span></div>
     </div>
     ${items || '<p class="fine">No sessions yet. Finished workouts land here and drive the weight suggestions.</p>'}
+    ${S.history.length > shown ? '<button class="btn-ghost" data-a="hist-more">Show earlier sessions (' + (S.history.length - shown) + ' more)</button>' : ''}
+  </div>
+  ${tabbar('history')}`;
+}
+
+/* ----- session review (read-only, workout-style cards with images) ----- */
+
+function reviewCard(e, i, total) {
+  const def = findEx(e.id);
+  const showW = e.sets.some(s => typeof s.w === 'number' && s.w > 0);
+  const rows = e.sets.map((s, j) => `
+    <div class="set-row done rv">
+      <span class="set-n">${j + 1}</span>
+      ${showW ? '<span class="rv-val">' + (s.w ? fmtW(s.w) + ' ' + unitLabel() : '—') + '</span>' : '<span class="bw">' + (e.mode === 'time' ? '' : 'BW') + '</span>'}
+      <span class="rv-val">${s.r != null ? s.r : '—'}</span>
+      <span></span>
+    </div>`).join('');
+  return `
+  <section class="card ex-card">
+    <div class="ex-head">
+      <div>
+        <div class="ex-num">${i + 1} of ${total}</div>
+        <h2>${esc(e.name)}</h2>
+        <div class="muted small">${e.sets.length} set${e.sets.length === 1 ? '' : 's'} logged</div>
+      </div>
+    </div>
+    ${demoHTML(e.id, e.name)}
+    ${def && def.cue ? '<p class="cue">' + esc(def.cue) + '</p>' : ''}
+    ${S.notes[e.id] ? '<p class="cue">Note: ' + esc(S.notes[e.id]) + '</p>' : ''}
+    ${howtoHTML(e.id)}
+    <div class="set-grid">
+      <div class="set-head"><span>Set</span><span>${showW ? 'Weight (' + unitLabel() + ')' : ''}</span><span>${(e.cardio || e.hiit) ? 'Minutes' : e.mode === 'time' ? 'Seconds' : 'Reps'}</span><span></span></div>
+      ${rows}
+    </div>
+  </section>`;
+}
+
+function viewReview() {
+  const w = S.history[S._reviewHist];
+  if (!w) { route = 'history'; return viewHistory(); }
+  const kcal = sessionKcal(w);
+  const cards = w.exercises.map((e, i) => reviewCard(e, i, w.exercises.length)).join('');
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="history">‹</button>
+      <div><div class="kicker">${esc(fmtDate(w.date))}</div><h1>${esc(groupLabels(w.groups))}</h1>
+      <p class="muted small">${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${kcal ? ' · ~' + kcal + ' kcal' : ''}</p></div>
+    </header>
+    ${w.prs && w.prs.length ? '<div class="pr-note"><strong>Personal record' + (w.prs.length > 1 ? 's' : '') + ':</strong> ' + esc(w.prs.join(' · ')) + '</div>' : ''}
+    ${cards}
+    <button class="btn-primary big" data-a="hist-repeat" data-i="${S._reviewHist}">Repeat this session</button>
   </div>
   ${tabbar('history')}`;
 }
 
 /* ----- trends ----- */
+
+/* Hard sets per muscle group this week (Mon-based), plus cardio minutes. */
+function weeklyMuscleSets() {
+  const start = weekStart(new Date());
+  const counts = new Map();
+  let cardioMin = 0;
+  for (const w of S.history) {
+    if (weekStart(new Date(w.date)) !== start) break; // newest-first: this week is a prefix
+    for (const e of (w.exercises || [])) {
+      if (e.cardio || e.hiit) { cardioMin += e.sets.reduce((x, s) => x + (s.r || 0), 0); continue; }
+      const def = findEx(e.id);
+      const m = def ? def.m[0] : null;
+      const g = UI_GROUPS.find(u => u.id !== 'full' && u.muscles.includes(m));
+      const label = g ? g.label : 'Other';
+      counts.set(label, (counts.get(label) || 0) + e.sets.length);
+    }
+  }
+  return { counts, cardioMin };
+}
+
+function weeklyVolumeCard() {
+  const { counts, cardioMin } = weeklyMuscleSets();
+  if (!counts.size && !cardioMin) return '';
+  const max = Math.max(1, ...counts.values());
+  const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([label, n]) => `
+    <div class="wv-row">
+      <span class="wv-label">${esc(label)}</span>
+      <div class="wv-bar"><div class="wv-fill" style="width:${Math.round(100 * n / max)}%"></div></div>
+      <span class="wv-n">${n}</span>
+    </div>`).join('');
+  return `
+    <section class="card">
+      <h2>This week</h2>
+      <p class="muted small">Sets per muscle group${cardioMin ? ' · ' + cardioMin + ' min cardio' : ''}</p>
+      <div class="wv">${rows}</div>
+    </section>`;
+}
 
 function viewTrends() {
   const list = loggedExercises();
@@ -1363,6 +2017,7 @@ function viewTrends() {
   return `
   <div class="screen">
     <header class="top"><div><div class="kicker">Your progress</div><h1>Trends</h1></div></header>
+    ${weeklyVolumeCard()}
     ${bodyweightRow()}
     ${rows || (S.bodyLog && S.bodyLog.length ? '' : '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>')}
   </div>
@@ -1403,7 +2058,7 @@ function viewTrend() {
   const first = series[0];
   const change = latest.weighted && series.length >= 2 ? latest.val - first.val : null;
   const name = def ? def.name : (latest && latest.name) || 'Exercise';
-  const unit = latest.weighted ? unitLabel() : (latest.mode === 'time' ? 'sec' : 'reps');
+  const unit = latest.weighted ? unitLabel() : latest.cardio ? 'min' : (latest.mode === 'time' ? 'sec' : 'reps');
   const recent = series.slice(-8).reverse().map(p =>
     '<div class="hist-ex"><span class="muted">' + fmtDate(p.date) + '</span><span>' + esc(p.sub) + '</span></div>').join('');
   return `
@@ -1413,7 +2068,7 @@ function viewTrend() {
       <div><div class="kicker">Trend</div><h1>${esc(name)}</h1></div>
     </header>
     <section class="card chart-card">
-      <div class="chart-cap"><span class="muted small">Heaviest set per session (${esc(unit)})</span></div>
+      <div class="chart-cap"><span class="muted small">${latest.weighted ? 'Heaviest set per session' : latest.cardio ? 'Longest session' : latest.mode === 'time' ? 'Longest hold' : 'Most reps in a set'} (${esc(unit)})</span></div>
       ${bigChartSVG(series)}
     </section>
     <div class="stats-row">
@@ -1585,6 +2240,10 @@ document.addEventListener('click', ev => {
     seg.querySelectorAll('button').forEach(b => b.classList.remove('on'));
     segBtn.classList.add('on');
     if (seg.id === 'min-seg') { S.sel.minutes = +segBtn.dataset.v; save(); }
+    if (seg.id === 'ob-units') {
+      const bw = $('#ob-bw');
+      if (bw) bw.placeholder = segBtn.dataset.v === 'kg' ? 'e.g. 68' : 'e.g. 150';
+    }
     if (seg.dataset.set) {
       const key = seg.dataset.set, val = segBtn.dataset.v;
       if (key === 'units' && S.profile.units !== val) convertUnits(val);
@@ -1597,6 +2256,9 @@ document.addEventListener('click', ev => {
     }
     return;
   }
+
+  const zoomEl = ev.target.closest('[data-zoom]');
+  if (zoomEl) { openLightbox(zoomEl.dataset.zoom, zoomEl.dataset.zname, +zoomEl.dataset.zi || 0); return; }
 
   const el = ev.target.closest('[data-a]');
   if (!el) return;
@@ -1611,7 +2273,12 @@ document.addEventListener('click', ev => {
       S.sel.groups = S.sel.groups.filter(x => x !== 'full');
       S.sel.groups = S.sel.groups.includes(g) ? S.sel.groups.filter(x => x !== g) : S.sel.groups.concat(g);
     }
-    save(); render();
+    save();
+    // patch in place — a full re-render on every tap flickers and drops taps
+    document.querySelectorAll('[data-a="chip"]').forEach(b =>
+      b.classList.toggle('on', S.sel.groups.includes(b.dataset.g)));
+    const gen = document.querySelector('[data-a="generate"]');
+    if (gen) gen.disabled = !S.sel.groups.length;
   }
 
   else if (a === 'use-split') {
@@ -1653,6 +2320,31 @@ document.addEventListener('click', ev => {
   else if (a === 'start') startWorkout();
   else if (a === 'set-done') setDone(+el.dataset.i, +el.dataset.j);
   else if (a === 'finish') finishWorkout(false);
+  else if (a === 'discard') discardSession();
+
+  else if (a === 'hiit-menu') { S._hiitSheet = true; render(); }
+  else if (a === 'hiit-close') { if (ev.target.closest('[data-stop]') && !ev.target.closest('[data-a="hiit-close"]')) return; S._hiitSheet = null; render(); }
+  else if (a === 'hiit-start') startHiitTpl(el.dataset.id);
+  else if (a === 'hiit-skip') { if (hiitRun) hiitAdvance(); }
+  else if (a === 'hiit-end') { if (hiitRun && confirm('End this block early? Time so far still gets logged.')) finishHiit(true); }
+  else if (a === 'hiit-pause') {
+    if (!hiitRun) return;
+    if (hiitRun.paused) {
+      hiitRun.end = Date.now() + hiitRun.left;
+      hiitRun.started += Date.now() - hiitRun.pausedAt; // pauses don't count as work time
+      hiitRun.paused = false;
+    } else {
+      hiitRun.left = Math.max(0, hiitRun.end - Date.now());
+      hiitRun.pausedAt = Date.now();
+      hiitRun.paused = true;
+    }
+    render();
+  }
+
+  else if (a === 'stretch-timer') startRest(+el.dataset.secs, el.dataset.name, true);
+  else if (a === 'cooldown-done') { stopRest(); go('summary'); }
+  else if (a === 'hist-review') { S._reviewHist = +el.dataset.i; go('review'); }
+  else if (a === 'hist-repeat') repeatSession(+el.dataset.i);
 
   else if (a === 'add-set') {
     const ex = S.active.ex[+el.dataset.i];
@@ -1690,6 +2382,8 @@ document.addEventListener('click', ev => {
 
   else if (a === 'rest-skip') stopRest();
   else if (a === 'rest-add') { if (rest) { rest.end += 30000; rest.total += 30; renderRestBar(); } }
+
+  else if (a === 'hist-more') { S._histShown = (S._histShown || 25) + 50; render(); }
 
   else if (a === 'hist-toggle') {
     if (ev.target.closest('input')) return;
@@ -1762,6 +2456,7 @@ document.addEventListener('click', ev => {
 
   else if (a === 'reset') {
     if (confirm('Erase your profile and ALL history on this phone? This cannot be undone.')) {
+      cancelSave(); // a pending debounced write must not resurrect the old state
       localStorage.removeItem(LS_KEY);
       S = defaultState();
       applyTheme();
@@ -1799,6 +2494,7 @@ document.addEventListener('input', ev => {
       s[f] = el.value === '' ? null : +el.value;
       if (f === 'w' && s.w != null) autofillWeight(i, j);
       if (f === 'w' && i === firstWeightedIndex()) refreshWarmup(i);
+      if (f === 'w') refreshPlates(i);
       save();
     }
   } else if (f === 'hw' || f === 'hr') {
@@ -1810,6 +2506,10 @@ document.addEventListener('input', ev => {
       else s.r = el.value === '' ? null : +el.value;
       save(); // derived totals recompute on Done
     }
+  } else if (f === 'exnote') {
+    const v = el.value.trim();
+    if (v) S.notes[el.dataset.id] = v; else delete S.notes[el.dataset.id];
+    save();
   } else if (f === 'name') {
     S.profile.name = el.value.trim(); save();
   } else if (f === 'eq') {
@@ -1912,8 +2612,13 @@ if ('serviceWorker' in navigator) {
       });
     });
   }).catch(() => { /* e.g. plain-HTTP LAN preview — app still works, just no offline cache */ });
+  // Reload when an accepted update takes over — but NOT on the very first
+  // install, where claim() also fires controllerchange and a reload would
+  // wipe in-progress onboarding input.
+  let hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
     if (reloaded) return; reloaded = true; location.reload();
   });
 }
@@ -1923,7 +2628,7 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 
 /* ---------------- boot ---------------- */
 
-delete S._snoozeBackup; S._editHist = -1; // transient view state, fresh each launch
+delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; // transient view state, fresh each launch
 applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();

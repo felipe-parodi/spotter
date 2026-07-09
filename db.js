@@ -15,11 +15,17 @@ const EQUIPMENT = [
   { id: 'rack',       label: 'Squat rack / pull-up bar' },
   { id: 'smith',      label: 'Smith machine' },
   { id: 'kettlebell', label: 'Kettlebells' },
+  { id: 'treadmill',  label: 'Treadmill' },
+  { id: 'bike',       label: 'Stationary bike' },
+  { id: 'rower',      label: 'Rowing machine' },
+  { id: 'elliptical', label: 'Elliptical' },
+  { id: 'stairs',     label: 'Stair climber' },
 ];
 
 const EQ_LABEL = {
   dumbbell: 'Dumbbells', bench: 'Bench', cable: 'Cable', barbell: 'Barbell',
   rack: 'Rack', smith: 'Smith machine', kettlebell: 'Kettlebell', bodyweight: 'Bodyweight',
+  treadmill: 'Treadmill', bike: 'Bike', rower: 'Rower', elliptical: 'Elliptical', stairs: 'Stairs',
 };
 
 const UI_GROUPS = [
@@ -30,6 +36,7 @@ const UI_GROUPS = [
   { id: 'legs',      label: 'Legs',      muscles: ['quads', 'hamstrings', 'quads', 'hamstrings', 'calves'] },
   { id: 'glutes',    label: 'Glutes',    muscles: ['glutes'] },
   { id: 'core',      label: 'Core',      muscles: ['core'] },
+  { id: 'cardio',    label: 'Cardio',    muscles: ['cardio'] },
   { id: 'full',      label: 'Full body', muscles: ['quads', 'chest', 'back', 'shoulders', 'hamstrings', 'glutes', 'core'] },
 ];
 
@@ -38,15 +45,18 @@ const GOAL_PARAMS = {
   fitness:  { label: 'General fitness',
               cmp:  { sets: 3, reps: [12, 15], rest: 75 },
               iso:  { sets: 3, reps: [12, 15], rest: 60 },
-              time: { sets: 3, reps: [30, 45], rest: 45 } },
+              time: { sets: 3, reps: [30, 45], rest: 45 },
+              cardio: { sets: 1, reps: [12, 20], rest: 60 } },
   muscle:   { label: 'Build muscle',
               cmp:  { sets: 4, reps: [8, 12],  rest: 105 },
               iso:  { sets: 3, reps: [10, 15], rest: 75 },
-              time: { sets: 3, reps: [30, 60], rest: 60 } },
+              time: { sets: 3, reps: [30, 60], rest: 60 },
+              cardio: { sets: 1, reps: [10, 15], rest: 60 } },
   strength: { label: 'Get stronger',
               cmp:  { sets: 4, reps: [5, 8],   rest: 150 },
               iso:  { sets: 3, reps: [8, 10],  rest: 90 },
-              time: { sets: 3, reps: [30, 60], rest: 60 } },
+              time: { sets: 3, reps: [30, 60], rest: 60 },
+              cardio: { sets: 1, reps: [10, 15], rest: 60 } },
 };
 
 const EXERCISES = [
@@ -243,4 +253,82 @@ const EXERCISES = [
   { id: 'bird-dog', name: 'Bird Dog', m: ['core'], m2: ['back'],
     eq: ['bodyweight'], lvl: 1, cmp: false, uni: true, incr: 0,
     cue: 'On all fours, extend opposite arm and leg until level, pause, return. Slow and steady beats fast.' },
+
+  /* ---------------- cardio (logged in minutes) ---------------- */
+  { id: 'treadmill-run', name: 'Treadmill Run', m: ['cardio'], m2: [],
+    eq: ['treadmill'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'A pace where full sentences are hard but short ones are fine. Ease the speed up, never jump it.' },
+  { id: 'incline-walk', name: 'Incline Treadmill Walk', m: ['cardio'], m2: ['glutes', 'calves'],
+    eq: ['treadmill'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Set a 8–12% incline at a brisk walk. Hands off the rails — that’s where the work is.' },
+  { id: 'bike-steady', name: 'Stationary Bike', m: ['cardio'], m2: ['quads'],
+    eq: ['bike'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Saddle at hip height, slight knee bend at the bottom of the stroke. Steady resistance you could hold for the whole ride.' },
+  { id: 'rower-steady', name: 'Rowing Machine', m: ['cardio'], m2: ['back', 'hamstrings'],
+    eq: ['rower'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Legs, then body, then arms — reverse it on the way back. Power comes from the leg drive, not the pull.' },
+  { id: 'elliptical-steady', name: 'Elliptical', m: ['cardio'], m2: [],
+    eq: ['elliptical'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Tall posture, push and pull the handles instead of hanging on them. Smooth, even strides.' },
+  { id: 'stair-climber', name: 'Stair Climber', m: ['cardio'], m2: ['glutes', 'calves'],
+    eq: ['stairs'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Whole foot on each step, light fingertips on the rails only for balance. Slow down before you hang on.' },
+  { id: 'jump-rope', name: 'Jump Rope', m: ['cardio'], m2: ['calves'],
+    eq: ['bodyweight'], lvl: 1, cmp: false, mode: 'time', cardio: true, incr: 0,
+    cue: 'Small hops on the balls of your feet, wrists doing the spinning. Trips are part of it — just keep going.' },
+];
+
+/* ---------------- cool-down stretches ----------------
+   Static holds offered after Finish, matched to the muscles trained. */
+const STRETCHES = [
+  { id: 'st-quad', name: 'Standing Quad Stretch', m: ['quads'], secs: 30, uni: true,
+    cue: 'Pull your heel toward your butt, knees together, hips pressed gently forward. Hold something for balance.' },
+  { id: 'st-ham', name: 'Standing Hamstring Fold', m: ['hamstrings'], secs: 30,
+    cue: 'Feet hip-width, soft knees, hinge forward and let your arms hang heavy. No bouncing.' },
+  { id: 'st-figure4', name: 'Figure-4 Glute Stretch', m: ['glutes'], secs: 30, uni: true,
+    cue: 'On your back, cross one ankle over the other knee, pull that thigh toward you until the outer hip lets go.' },
+  { id: 'st-hipflexor', name: 'Kneeling Hip Flexor Stretch', m: ['quads', 'glutes'], secs: 30, uni: true,
+    cue: 'Half-kneel, tuck your tailbone, shift your weight forward until the front of the back hip stretches.' },
+  { id: 'st-calf', name: 'Wall Calf Stretch', m: ['calves', 'cardio'], secs: 30, uni: true,
+    cue: 'Hands on the wall, one leg straight back with the heel down, lean in until the calf pulls.' },
+  { id: 'st-chest', name: 'Doorway Chest Stretch', m: ['chest', 'shoulders'], secs: 30,
+    cue: 'Forearms on the door frame, elbows at shoulder height, step through until your chest opens up.' },
+  { id: 'st-lat', name: 'Overhead Lat Stretch', m: ['back'], secs: 30, uni: true,
+    cue: 'Reach one arm overhead, grab that wrist with the other hand and lean sideways until the side of your back stretches.' },
+  { id: 'st-tricep', name: 'Overhead Triceps Stretch', m: ['triceps', 'shoulders'], secs: 30, uni: true,
+    cue: 'Reach down your spine with one hand, gently press that elbow back with the other.' },
+  { id: 'st-cross', name: 'Cross-Body Shoulder Stretch', m: ['shoulders', 'biceps'], secs: 30, uni: true,
+    cue: 'Pull one arm straight across your chest with the other, keeping that shoulder down away from your ear.' },
+  { id: 'st-child', name: 'Child’s Pose', m: ['back', 'core', 'hamstrings', 'cardio'], secs: 45,
+    cue: 'Knees wide, sit back onto your heels, arms long in front, forehead down. Slow breaths out.' },
+];
+
+/* ---------------- HIIT blocks ----------------
+   Guided interval sequences run by the in-app timer. hard=true intervals
+   get the "push" styling; every transition beeps. */
+function hiitRep(n, steps) {
+  const out = [];
+  for (let i = 0; i < n; i++) steps.forEach(s => out.push(s));
+  return out;
+}
+
+const HIIT_TEMPLATES = [
+  { id: 'tabata', name: 'Tabata', desc: '4 min · 8 × (20s all-out / 10s off)',
+    hint: 'Pick one move and stick with it — bike sprint, squats, mountain climbers…',
+    seq: hiitRep(8, [{ label: 'All-out', secs: 20, hard: true }, { label: 'Rest', secs: 10 }]) },
+  { id: 'thirty', name: '30/30 Intervals', desc: '10 min · 10 × (30s hard / 30s easy)',
+    hint: 'Any cardio machine. Hard means you’re glad when it ends; easy means you recover.',
+    seq: hiitRep(10, [{ label: 'Hard', secs: 30, hard: true }, { label: 'Easy', secs: 30 }]) },
+  { id: 'ot-tread', name: 'Tread Block', desc: '11½ min · 4 × (1:00 push / 1:30 base) + 30s all-out',
+    hint: 'Orangetheory-style. Base = comfortable jog, push = challenging, all-out = empty the tank.',
+    seq: hiitRep(4, [{ label: 'Push pace', secs: 60, hard: true }, { label: 'Base pace', secs: 90 }])
+      .concat([{ label: 'ALL-OUT', secs: 30, hard: true }, { label: 'Walk it off', secs: 60 }]) },
+  { id: 'bw-circuit', name: 'Bodyweight Circuit', desc: '12 min · 3 rounds · 40s on / 20s off',
+    hint: 'Squats → push-ups → mountain climbers → plank. No equipment, no excuses.',
+    seq: hiitRep(3, [
+      { label: 'Squats', secs: 40, hard: true }, { label: 'Rest', secs: 20 },
+      { label: 'Push-ups', secs: 40, hard: true }, { label: 'Rest', secs: 20 },
+      { label: 'Mountain climbers', secs: 40, hard: true }, { label: 'Rest', secs: 20 },
+      { label: 'Plank', secs: 40, hard: true }, { label: 'Rest', secs: 20 },
+    ]) },
 ];
