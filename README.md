@@ -9,6 +9,12 @@ after install — each phone keeps its own profile and history.
   balanced plan with specific sets, reps, rest times, a form cue, and start/end
   demo photos per exercise. Tap any photo for a fullscreen lightbox with
   pinch/double-tap zoom, pan, and alternate-angle frames.
+- **Weekly schedule** (optional): pick your training days and Spotter plans the
+  week from standard splits (full body, upper/lower, push/pull/legs), scored so
+  no muscle group is hit two days running — rest days stay restful, an optional
+  cardio day breaks up dense weeks, and any day is tap-to-override (with a
+  warning, never a block). Today shows the plan with one-tap build, a mini week
+  strip, and a "you missed X — swap it in?" catch-up when it's safe.
 - Plans are built from a ~65-exercise database — now including **cardio**
   (treadmill, bike, rower, elliptical, stair climber, jump rope; logged in
   minutes) — filtered by your gym's equipment (toggle what your gym has in
@@ -19,12 +25,17 @@ after install — each phone keeps its own profile and history.
 - **Guided HIIT blocks** — Tabata, 30/30 intervals, an Orangetheory-style
   tread block, a bodyweight circuit — run on a fullscreen interval timer with
   beeps, launched from Today or mid-session, and log themselves as minutes.
-- Log weight and reps per set with a rest timer; the app remembers and suggests
-  **+5 lb** the next time you hit every rep target, auto-fills your working
-  weight across sets, shows warm-up ramp sets **and a per-side plate breakdown**
-  computed from the weight you actually enter, detects personal records, and
-  suggests today's split from what you trained last. Each exercise takes a
-  **persistent note** (seat height, grip, straps).
+- Log weight and reps per set with a rest timer; suggestions come from your
+  actual history, **set for set** — hit every rep target and each set moves up
+  an increment; ramp 95/115/135 and next time it prescribes the same ramp.
+  Miss badly and it suggests solidifying a touch lighter; stuck at one weight
+  for three sessions and it proposes a 10% deload; away 4+ weeks and it eases
+  you back in at 90%. Warm-ups scale to the load (light weights skip the
+  ceremony, heavy lifts get a third step) and barbell warm-up steps land on
+  **plate-loadable weights with per-side counts**, plus a plate breakdown for
+  the working weight. PRs detected, today's split suggested from what you
+  trained last, and each exercise takes a **persistent note** (seat height,
+  grip, straps).
 - After **Finish**: an optional cool-down (3–4 stretches matched to what you
   trained, with hold timers — skippable), then a summary with a deliberately
   **conservative calorie estimate** (MET-based; only shown when a bodyweight
