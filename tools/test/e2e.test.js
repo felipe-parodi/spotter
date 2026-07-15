@@ -87,6 +87,23 @@ const ok = (cond, msg) => { console.log((cond ? 'ok: ' : 'FAIL: ') + msg); if (!
   ok(/Repeat of/.test(await page.textContent('.hint')), 'repeat builds a preview draft');
   await page.click('[data-a="nav"][data-r="today"]');
 
+  // --- weekly schedule ---
+  await page.click('.tab[data-r="profile"]');
+  await page.click('label:has(input[data-f="sched-enabled"])');
+  await page.waitForSelector('.sched-row');
+  ok(await page.locator('.sched-row').count() === 3, 'enabling schedule seeds Mon/Wed/Fri');
+  const todayIdx = await page.evaluate(() => new Date().getDay());
+  const todayPlanned = await page.evaluate(d => !!S.schedule.days[d], todayIdx);
+  if (!todayPlanned) await page.click(`[data-a="sched-day"][data-d="${todayIdx}"]`); // make today a training day
+  await page.click('.tab[data-r="today"]');
+  await page.waitForSelector('.sched');
+  ok(/On today/.test(await page.textContent('.sched')), 'Today shows the scheduled plan');
+  ok(await page.locator('.wk-strip .wk-day').count() === 7, 'week strip renders 7 days');
+  await page.click('[data-a="sched-build"]');
+  await page.waitForSelector('[data-a="start"]');
+  ok(await page.locator('.ex-row').count() >= 3, 'one-tap build creates the scheduled plan');
+  await page.click('[data-a="nav"][data-r="today"]');
+
   // --- HIIT runner ---
   await page.click('[data-a="hiit-menu"]');
   await page.click('[data-a="hiit-start"][data-id="tabata"]');

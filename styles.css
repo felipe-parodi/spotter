@@ -922,6 +922,44 @@ h2 { font-size: 17px; }
 .wv-fill { height: 100%; border-radius: 100px; background: var(--accent); }
 .wv-n { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 
+/* ---------------- weekly schedule ---------------- */
+
+.sched { border-left: 3px solid var(--accent); }
+.sched.rest { border-left-color: var(--line); }
+.sched-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sched-head strong { font-family: var(--serif); font-size: 17px; }
+
+.wk-strip { display: flex; gap: 4px; flex-shrink: 0; }
+.wk-day {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 10.5px; font-weight: 800;
+  color: var(--muted);
+  background: var(--sunken);
+}
+.wk-day.train { background: var(--accent-soft); color: var(--accent); }
+.wk-day.did { background: var(--accent); color: var(--on-accent); }
+.wk-day.now { box-shadow: 0 0 0 2px var(--accent); }
+
+.sched-rows { display: flex; flex-direction: column; }
+.sched-row { border-bottom: 1px solid var(--line); }
+.sched-row:last-child { border-bottom: none; }
+.sched-row-head {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%;
+  padding: 11px 2px;
+  text-align: left;
+}
+.sched-dayname { font-weight: 800; font-family: var(--serif); width: 44px; }
+.sched-split { flex: 1; font-weight: 600; }
+.sched-editor { display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 12px; }
+.sched-warn {
+  font-size: 12.5px;
+  color: var(--danger);
+  padding: 0 2px 10px;
+}
+
 /* ---------------- reduced motion ---------------- */
 
 @media (prefers-reduced-motion: reduce) {

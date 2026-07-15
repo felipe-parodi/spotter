@@ -303,6 +303,31 @@ const STRETCHES = [
     cue: 'Knees wide, sit back onto your heels, arms long in front, forehead down. Slow breaths out.' },
 ];
 
+/* ---------------- weekly schedule splits ----------------
+   The scheduler assigns these to weekdays; groups reference UI_GROUPS ids,
+   so the generator builds each day's session exactly like a manual pick. */
+const SPLITS = {
+  full:   { label: 'Full body',     groups: ['full'] },
+  upper:  { label: 'Upper body',    groups: ['chest', 'back', 'shoulders', 'arms'] },
+  lower:  { label: 'Legs & glutes', groups: ['legs', 'glutes', 'core'] },
+  push:   { label: 'Push',          groups: ['chest', 'shoulders', 'arms'] },
+  pull:   { label: 'Pull',          groups: ['back', 'arms', 'core'] },
+  legs:   { label: 'Legs',          groups: ['legs', 'glutes'] },
+  cardio: { label: 'Cardio',        groups: ['cardio'] },
+};
+
+/* strength-split template by training days per week; '3adj' is used when
+   the chosen days include back-to-back pairs (full-body needs rest around it) */
+const SPLIT_TEMPLATES = {
+  1: ['full'],
+  2: ['full', 'full'],
+  3: ['full', 'full', 'full'],
+  '3adj': ['upper', 'lower', 'full'],
+  4: ['upper', 'lower', 'upper', 'lower'],
+  5: ['upper', 'lower', 'push', 'pull', 'legs'],
+  6: ['push', 'pull', 'legs', 'push', 'pull', 'legs'],
+};
+
 /* ---------------- HIIT blocks ----------------
    Guided interval sequences run by the in-app timer. hard=true intervals
    get the "push" styling; every transition beeps. */

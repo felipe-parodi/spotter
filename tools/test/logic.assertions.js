@@ -141,4 +141,89 @@ function exerciseCardSafe() {
   return html.includes('Plates: 45 per side') && html.includes('Add a note');
 }
 
+// --- weekly scheduler ---
+let wk = buildWeek([1, 3, 5], false, 0); // Mon/Wed/Fri
+assert(Object.values(wk.assign).every(s => s === 'full'), 'MWF → full body ×3');
+assert(wk.score === 0, 'MWF has zero conflict (' + wk.score + ')');
+
+wk = buildWeek([1, 2, 4, 5], false, 0); // Mon/Tue + Thu/Fri
+assert(wk.score === 0, '4-day upper/lower alternation avoids all overlap (' + wk.score + ')');
+const four = [wk.assign[1], wk.assign[2], wk.assign[4], wk.assign[5]];
+assert(four.filter(s => s === 'upper').length === 2 && four.filter(s => s === 'lower').length === 2, '4-day uses upper/lower ×2');
+assert(wk.assign[1] !== wk.assign[2] && wk.assign[4] !== wk.assign[5], 'adjacent days differ');
+
+wk = buildWeek([1, 2, 3, 4, 5, 6], false, 0); // six straight days → PPL×2
+assert(splitConflict(wk.assign[1], wk.assign[2]) < 3, '6-day: no heavy back-to-back overlap');
+assert(wk.score <= 8, '6-day PPL score acceptable (' + wk.score + ')');
+
+wk = buildWeek([1, 2, 3, 4, 5], true, 0);
+assert(Object.values(wk.assign).filter(s => s === 'cardio').length === 1, 'cardio day placed when requested');
+
+wk = buildWeek([0, 1, 2, 3, 4, 5, 6], false, 0);
+assert(Object.values(wk.assign).includes('cardio'), '7 lifting days forces a recovery/cardio day');
+
+assert(splitConflict('upper', 'upper') >= 9, 'same split adjacent scores high');
+assert(splitConflict('upper', 'lower') === 0, 'upper/lower do not conflict');
+assert(splitConflict('push', 'pull') <= 2, 'push/pull share only arms');
+
+S.schedule = { enabled: true, minutes: 45, cardioDay: false, variant: 0, days: { 1: { split: 'upper', minutes: null }, 2: { split: 'upper', minutes: null } } };
+assert(schedWarning(2).includes('Overlap') || schedWarning(2).includes('overlap'), 'manual back-to-back upper warns');
+
+// today's plan + banner render
+const todayIdx = new Date().getDay();
+S.schedule.days = {}; S.schedule.days[todayIdx] = { split: 'lower', minutes: null };
+S.history = [];
+const tp = scheduleToday();
+assert(tp && tp.label === 'Legs & glutes' && tp.minutes === 45, 'scheduleToday resolves plan');
+assert(scheduleBanner().includes('On today’s plan'), 'banner shows today’s plan');
+assert(viewProfile().includes('Weekly schedule'), 'profile shows schedule card');
+
+// missed-day catch-up: scheduled 2 days ago, nothing trained since
+const twoAgo = (todayIdx + 5) % 7;
+S.schedule.days = {}; S.schedule.days[twoAgo] = { split: 'pull', minutes: null };
+assert(missedSplit() && missedSplit().split === 'pull', 'missed day surfaces catch-up');
+// ...but not if yesterday's ad-hoc training already hit those muscles
+S.history = [{ date: day(1), groups: ['back'], minutes: 30, setCount: 3, volume: 0,
+  exercises: [{ id: 'bb-row', name: 'Row', mode: 'reps', sets: [{ w: 95, r: 8 }] }] }];
+assert(missedSplit() === null, 'catch-up suppressed after clashing session');
+S.schedule = defaultState().schedule;
+
+// --- suggestion engine ---
+const perfEntry = (daysAgo, sets, target) => ({
+  date: day(daysAgo), groups: ['chest'], minutes: 30, setCount: sets.length, volume: 0,
+  exercises: [{ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', targetReps: target || [8, 12], sets }],
+});
+const sugFor = () => suggestFor({ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', reps: [8, 12] });
+
+// staleness: 5 weeks away → 90%
+S.history = [perfEntry(36, [{ w: 100, r: 12 }, { w: 100, r: 12 }])];
+let sg = sugFor();
+assert(sg.w === 90 && /weeks ago/.test(sg.note), 'stale history eases back to 90% (' + sg.w + ')');
+
+// plateau: 3 sessions stuck → deload
+S.history = [perfEntry(2, [{ w: 100, r: 10 }]), perfEntry(5, [{ w: 100, r: 9 }]), perfEntry(8, [{ w: 100, r: 10 }])];
+sg = sugFor();
+assert(sg.w === 90 && /deload/i.test(sg.note), 'plateau triggers deload (' + sg.note + ')');
+
+// hard miss: solidify at 92.5%
+S.history = [perfEntry(2, [{ w: 100, r: 10 }, { w: 100, r: 5 }])];
+sg = sugFor();
+assert(sg.w === 92.5 && /Solidify/.test(sg.note), 'hard miss backs off to 92.5 (' + sg.w + ')');
+
+// per-set mirror of a ramp
+S.history = [perfEntry(2, [{ w: 95, r: 10 }, { w: 105, r: 10 }, { w: 115, r: 9 }])];
+sg = sugFor();
+assert(sg.w === 115 && sg.setW && sg.setW.join(',') === '95,105,115', 'per-set ramp mirrored (' + (sg.setW || []).join(',') + ')');
+
+// per-set progression when every target hit
+S.history = [perfEntry(2, [{ w: 95, r: 12 }, { w: 105, r: 12 }, { w: 115, r: 12 }])];
+sg = sugFor();
+assert(sg.w === 120 && sg.setW.join(',') === '100,110,120', 'progression applies +step per set (' + sg.setW.join(',') + ')');
+
+// warm-up ramp shapes
+assert(warmupInner(185, true).split('·').length >= 4 && /\/side/.test(warmupInner(185, true)), 'heavy barbell gets 3 plate-aware steps');
+assert(/\(bar\)/.test(warmupInner(85, true)), 'barbell ramp starts from the empty bar when 50% rounds to it');
+assert(/light enough/.test(warmupInner(30, false)), 'light dumbbell work skips the ramp');
+assert(plateRound(93) === 95, 'plateRound lands on loadable weight (' + plateRound(93) + ')');
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');
