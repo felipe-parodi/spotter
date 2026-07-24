@@ -141,4 +141,57 @@ function exerciseCardSafe() {
   return html.includes('Plates: 45 per side') && html.includes('Add a note');
 }
 
+// --- weight ramp: default, learned, and what it refuses to overwrite ---
+function activeDbBench(logRows) {
+  const def = findEx('db-bench');
+  const entry = snapshot(def, assignParams(def, 45));
+  entry.log = logRows;
+  entry.sets = logRows.length;
+  entry.suggest = suggestFor(entry);
+  S.active = { startedAt: Date.now(), groups: ['chest'], minutes: 45, est: 0, ex: [entry] };
+  return entry;
+}
+const blank = n => Array.from({ length: n }, () => ({ w: null, r: null, done: false }));
+
+S.history = [];
+let ex = activeDbBench(blank(4));
+assert(setShape('db-bench', 4) === null, 'no history → no learned shape');
+assert(rampWeights(ex, 0, 30, 4).join() === '30,35,40,45', 'default ramp is one increment per set (' + rampWeights(ex, 0, 30, 4).join() + ')');
+assert(rampWeights(ex, 0, 32.5, 3).join() === '32.5,37.5,42.5', 'odd base keeps its offset');
+
+ex.log[0].w = 30;
+autofillWeight(0, 0);
+assert(ex.log.map(s => s.w).join() === '30,35,40,45', 'autofill projects the ramp (' + ex.log.map(s => s.w).join() + ')');
+ex.log[2].w = 50; ex.log[2].auto = false; // typed by hand
+ex.log[0].w = 40; autofillWeight(0, 0);
+assert(ex.log.map(s => s.w).join() === '40,45,50,55', 'a typed weight survives re-projection (' + ex.log.map(s => s.w).join() + ')');
+
+// straight sets in history → learned shape overrides the default ramp
+S.history = [{ date: day(2), groups: ['chest'], minutes: 40, setCount: 3, volume: 0,
+  exercises: [{ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', targetReps: [8, 12],
+    sets: [{ w: 40, r: 10 }, { w: 40, r: 10 }, { w: 40, r: 10 }] }] }];
+ex = activeDbBench(blank(4));
+assert(rampWeights(ex, 0, 30, 4).join() === '30,30,30,30', 'learned straight sets stay flat (' + rampWeights(ex, 0, 30, 4).join() + ')');
+
+// an ascending session teaches the ascending shape, from the very first session
+S.history[0].exercises[0].sets = [{ w: 30, r: 12 }, { w: 40, r: 10 }, { w: 50, r: 8 }];
+ex = activeDbBench(blank(4));
+assert(setShape('db-bench', 3).map(r => Math.round(r * 10) / 10).join() === '1,1.3,1.7', 'shape learned from one session');
+// 30/40/50 → ×1, ×1.33, ×1.67, and a 4th set carries the same step on to ×2
+assert(rampWeights(ex, 0, 40, 4).join() === '40,55,65,80', 'learned ramp scales to a new base (' + rampWeights(ex, 0, 40, 4).join() + ')');
+const wplan = weightPlan(ex);
+assert(wplan && Math.max.apply(null, wplan) === ex.suggest.w, "plan peaks at today's suggested weight (" + wplan + " vs " + ex.suggest.w + ")");
+assert(setRow(ex, 0, ex.log[0], 0, wplan).includes('value="' + wplan[0] + '"'), 'set row pre-fills its planned weight');
+S.active = null;
+
+// --- rest is 1½ min for lifting, on every goal and session length ---
+['fitness', 'muscle', 'strength'].forEach(g => {
+  S.profile.goal = g;
+  assert(assignParams(findEx('bb-squat'), 45).rest === 90, g + ': compound rests 90s');
+  assert(assignParams(findEx('db-curl'), 45).rest === 90, g + ': isolation rests 90s');
+  assert(assignParams(findEx('bb-squat'), 30).rest === 90, g + ': short session keeps 90s');
+});
+S.profile.goal = 'muscle';
+assert(restText(90) === '1½ min', 'rest reads as 1½ min (' + restText(90) + ')');
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');

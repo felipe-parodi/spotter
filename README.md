@@ -19,9 +19,13 @@ after install — each phone keeps its own profile and history.
 - **Guided HIIT blocks** — Tabata, 30/30 intervals, an Orangetheory-style
   tread block, a bodyweight circuit — run on a fullscreen interval timer with
   beeps, launched from Today or mid-session, and log themselves as minutes.
-- Log weight and reps per set with a rest timer; the app remembers and suggests
-  **+5 lb** the next time you hit every rep target, auto-fills your working
-  weight across sets, shows warm-up ramp sets **and a per-side plate breakdown**
+- Log weight and reps per set with a 1½-minute rest timer; the app remembers and
+  suggests **+5 lb** the next time you hit every rep target, **guesses the rest
+  of your ramp** the moment you enter the first weight — one increment per set
+  until it has seen you lift, then the set-to-set shape you actually log,
+  averaged over your last few sessions and re-projected whenever you correct a
+  number (weights you type yourself are never overwritten) —
+  shows warm-up ramp sets **and a per-side plate breakdown**
   computed from the weight you actually enter, detects personal records, and
   suggests today's split from what you trained last. Each exercise takes a
   **persistent note** (seat height, grip, straps).
