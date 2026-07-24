@@ -25,12 +25,16 @@ after install — each phone keeps its own profile and history.
 - **Guided HIIT blocks** — Tabata, 30/30 intervals, an Orangetheory-style
   tread block, a bodyweight circuit — run on a fullscreen interval timer with
   beeps, launched from Today or mid-session, and log themselves as minutes.
-- Log weight and reps per set with a rest timer; suggestions come from your
-  actual history, **set for set** — hit every rep target and each set moves up
-  an increment; ramp 95/115/135 and next time it prescribes the same ramp.
-  Miss badly and it suggests solidifying a touch lighter; stuck at one weight
-  for three sessions and it proposes a 10% deload; away 4+ weeks and it eases
-  you back in at 90%. Warm-ups scale to the load (light weights skip the
+- Log weight and reps per set with a **1½-minute** rest timer; suggestions come
+  from your actual history, **set for set** — hit every rep target and each set
+  moves up an increment; ramp 95/115/135 and next time it prescribes the same
+  ramp. Miss badly and it suggests solidifying a touch lighter; stuck at one
+  weight for three sessions and it proposes a 10% deload; away 4+ weeks and it
+  eases you back in at 90%. Type a weight that differs from the prescription and
+  **the rest of the ramp re-scales to it** — one increment per set the first
+  time you do a lift, the shape you actually log after that, re-projected
+  whenever you correct a number (weights you type yourself are never
+  overwritten). Warm-ups scale to the load (light weights skip the
   ceremony, heavy lifts get a third step) and barbell warm-up steps land on
   **plate-loadable weights with per-side counts**, plus a plate breakdown for
   the working weight. PRs detected, today's split suggested from what you

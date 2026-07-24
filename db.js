@@ -40,20 +40,22 @@ const UI_GROUPS = [
   { id: 'full',      label: 'Full body', muscles: ['quads', 'chest', 'back', 'shoulders', 'hamstrings', 'glutes', 'core'] },
 ];
 
-/* sets / rep-range / rest(sec) by goal and exercise type */
+/* sets / rep-range / rest(sec) by goal and exercise type.
+   Lifting rests are a flat 1½ min whatever the goal; timed holds and cardio
+   keep their own shorter breaks. */
 const GOAL_PARAMS = {
   fitness:  { label: 'General fitness',
-              cmp:  { sets: 3, reps: [12, 15], rest: 75 },
-              iso:  { sets: 3, reps: [12, 15], rest: 60 },
+              cmp:  { sets: 3, reps: [12, 15], rest: 90 },
+              iso:  { sets: 3, reps: [12, 15], rest: 90 },
               time: { sets: 3, reps: [30, 45], rest: 45 },
               cardio: { sets: 1, reps: [12, 20], rest: 60 } },
   muscle:   { label: 'Build muscle',
-              cmp:  { sets: 4, reps: [8, 12],  rest: 105 },
-              iso:  { sets: 3, reps: [10, 15], rest: 75 },
+              cmp:  { sets: 4, reps: [8, 12],  rest: 90 },
+              iso:  { sets: 3, reps: [10, 15], rest: 90 },
               time: { sets: 3, reps: [30, 60], rest: 60 },
               cardio: { sets: 1, reps: [10, 15], rest: 60 } },
   strength: { label: 'Get stronger',
-              cmp:  { sets: 4, reps: [5, 8],   rest: 150 },
+              cmp:  { sets: 4, reps: [5, 8],   rest: 90 },
               iso:  { sets: 3, reps: [8, 10],  rest: 90 },
               time: { sets: 3, reps: [30, 60], rest: 60 },
               cardio: { sets: 1, reps: [10, 15], rest: 60 } },

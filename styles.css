@@ -765,14 +765,25 @@ h2 { font-size: 17px; }
   padding: 11px 18px;
   font-size: 14px; font-weight: 600;
   box-shadow: 0 8px 28px rgba(20, 17, 12, 0.3);
-  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  /* hidden state hides outright: sliding by its own height isn't enough to
+     clear a notch's safe-area inset, and a sliver used to sit under the camera */
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.25s ease, visibility 0s linear 0.35s;
   z-index: 100;
   white-space: nowrap;
   max-width: 90vw;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#toast.show { transform: translate(-50%, 0); }
+#toast.show {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.2s ease, visibility 0s;
+}
 .toast-btn {
   color: var(--ink);
   background: var(--on-ink);

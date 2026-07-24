@@ -557,7 +557,11 @@ function assignParams(ex, minutes) {
   const kind = ex.cardio ? 'cardio' : ex.mode === 'time' ? 'time' : (ex.cmp ? 'cmp' : 'iso');
   const p = goal[kind];
   let sets = p.sets, rest = p.rest;
-  if (minutes <= 30) { sets = Math.min(sets, 3); rest = Math.round(rest * 0.8); }
+  // short sessions drop a set; lifting keeps its full 1½ min between sets
+  if (minutes <= 30) {
+    sets = Math.min(sets, 3);
+    if (kind === 'time' || kind === 'cardio') rest = Math.round(rest * 0.8);
+  }
   if (todayReadiness().dropSet && sets > 2) sets -= 1; // gentler day
   return { sets, reps: p.reps.slice(), rest, kind };
 }
@@ -692,7 +696,7 @@ function repeatSession(i) {
     } else {
       entry = { id: e.id, name: e.name, cue: '', cmp: false, uni: !!e.uni, mode: e.mode || 'reps',
                 cardio: !!e.cardio, eqLabel: 'Custom', sets: e.sets.length,
-                reps: e.targetReps || [8, 12], rest: 60 };
+                reps: e.targetReps || [8, 12], rest: 90 };
     }
     entry.sets = Math.max(1, e.sets.length);
     ex.push(entry);
@@ -941,7 +945,8 @@ function setDone(i, j) {
   s.done = !s.done;
   if (s.done) {
     if (navigator.vibrate) navigator.vibrate(10); // tactile tick
-    if (s.w == null) { const sw = suggestedW(ex, j); if (sw) s.w = sw; }
+    if (s.w == null) { const sw = suggestedW(ex, j); if (sw) { s.w = sw; s.auto = true; } }
+    if (s.w != null) autofillWeight(i, j); // ticking a set also settles the ones after it
     if (s.r == null) s.r = ex.reps[1];
     const isLastSet = i === S.active.ex.length - 1 && j === ex.log.length - 1;
     if (!isLastSet) startRest(ex.rest, ex.name);
@@ -1922,20 +1927,93 @@ function weightApplies(e) {
   return orig ? orig.incr > 0 : true;
 }
 
-/* When you set a weight, carry it forward to later sets you haven't filled yet.
-   Skipped when the suggestion is a per-set ramp — typing set 1 shouldn't flatten it. */
+/* ---- per-set weight shape ----------------------------------------------
+   How weight moves across the sets of one exercise, as multipliers on set 1.
+   Learned from what was actually logged (averaged over the last few sessions
+   that recorded two or more weighted sets); null until there's history to
+   learn from, which callers read as "use the default ramp". */
+function setShape(exId, n) {
+  const acc = []; // acc[k] = { sum, n } of set-k / set-1 ratios
+  let sessions = 0;
+  for (const w of S.history) {
+    if (sessions >= 5) break;
+    const he = (w.exercises || []).find(e => e.id === exId);
+    const sets = he && he.sets;
+    if (!sets || sets.length < 2) continue;
+    const base = typeof sets[0].w === 'number' && sets[0].w > 0 ? sets[0].w : 0;
+    if (!base) continue;
+    let used = 0;
+    for (let k = 1; k < sets.length; k++) {
+      const v = sets[k].w;
+      if (typeof v !== 'number' || v <= 0) continue;
+      if (!acc[k]) acc[k] = { sum: 0, n: 0 };
+      acc[k].sum += v / base; acc[k].n++; used++;
+    }
+    if (used) sessions++;
+  }
+  if (!sessions) return null;
+  const r = [1];
+  for (let k = 1; k < Math.max(acc.length, n); k++) {
+    const v = (acc[k] && acc[k].n)
+      ? acc[k].sum / acc[k].n
+      : r[k - 1] + (k >= 2 ? Math.max(0, r[k - 1] - r[k - 2]) : 0); // past the data, hold the last step
+    r[k] = Math.min(3, Math.max(0.25, v)); // a mistyped log shouldn't send the ramp to the moon
+  }
+  return r;
+}
+
+/* The shape to project, best source first: today's per-set prescription from
+   suggestFor (it already folds in deloads, easing back, and +increment), then
+   the averaged history, then nothing — which rampWeights reads as "ramp by one
+   increment per set". */
+function shapeFor(ex, n) {
+  const sw = ex.suggest && ex.suggest.setW;
+  if (sw && sw.length && sw[0] > 0) {
+    const r = [];
+    for (let k = 0; k < n; k++) {
+      const v = sw[Math.min(k, sw.length - 1)]; // past the prescription, hold the last set
+      r[k] = v > 0 ? v / sw[0] : 1;
+    }
+    return r;
+  }
+  return setShape(ex.id, n);
+}
+
+/* Weights for sets `from`…`from + count - 1`, given `base` on set `from`.
+   Keeps the shape when we know one, otherwise one increment per set. Only the
+   change from `base` snaps to the increment, so an odd base (32.5) stays put. */
+function rampWeights(ex, from, base, count) {
+  const step = incrFor(findEx(ex.id) || ex) || 2.5;
+  const shape = shapeFor(ex, from + count);
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    const i = from + k;
+    const v = (shape && shape[from] > 0 && shape[i] != null)
+      ? base * (shape[i] / shape[from])
+      : base + k * step;
+    out.push(Math.max(step, Math.round((base + Math.round((v - base) / step) * step) * 2) / 2));
+  }
+  return out;
+}
+
+/* When you set a weight, project the rest of the ramp onto the sets after it —
+   scaled to what you actually typed, so entering a different set 1 keeps the
+   prescribed shape instead of flattening or ignoring it. Guesses are flagged
+   `auto` so a later correction re-projects over them; a number you typed
+   yourself is never overwritten. */
 function autofillWeight(i, j) {
   const ex = S.active.ex[i];
-  const sug = ex.suggest;
-  if (sug && sug.setW && new Set(sug.setW.map(String)).size > 1) return;
-  const w = ex.log[j].w;
+  const base = ex.log[j].w;
+  if (!(base > 0) || ex.log.length - j < 2) return;
+  const guess = rampWeights(ex, j, base, ex.log.length - j);
   for (let k = j + 1; k < ex.log.length; k++) {
     const later = ex.log[k];
-    if (!later.done && (later.w == null || later.w === '')) {
-      later.w = w;
-      const input = document.querySelector('#set-' + i + '-' + k + ' [data-f="w"]');
-      if (input && document.activeElement !== input) input.value = w;
-    }
+    if (later.done) continue;
+    if (later.w != null && later.w !== '' && !later.auto) continue;
+    later.w = guess[k - j];
+    later.auto = true;
+    const input = document.querySelector('#set-' + i + '-' + k + ' [data-f="w"]');
+    if (input && document.activeElement !== input) input.value = later.w;
   }
 }
 
@@ -2736,10 +2814,14 @@ document.addEventListener('click', ev => {
   else if (a === 'hist-repeat') repeatSession(+el.dataset.i);
 
   else if (a === 'add-set') {
-    const ex = S.active.ex[+el.dataset.i];
+    const i = +el.dataset.i;
+    const ex = S.active.ex[i];
     ex.log.push({ w: null, r: null, done: false });
     ex.sets = ex.log.length;
     save(); render();
+    // carry the ramp onto the set just added
+    const last = ex.log.reduce((n, s, k) => (k < ex.log.length - 1 && s.w > 0 ? k : n), -1);
+    if (last >= 0) { autofillWeight(i, last); save(); }
   }
 
   else if (a === 'rm-ex') {
@@ -2881,7 +2963,9 @@ document.addEventListener('input', ev => {
     const s = ex && ex.log[j];
     if (s) {
       s[f] = el.value === '' ? null : +el.value;
-      if (f === 'w' && s.w != null) autofillWeight(i, j);
+      // a number you typed is yours — and the ramp only projects once you're
+      // done typing (on change), so "30" never lands on later sets as "3"
+      if (f === 'w') s.auto = false;
       if (f === 'w' && i === firstWeightedIndex()) refreshWarmup(i);
       if (f === 'w') refreshPlates(i);
       save();
@@ -2977,7 +3061,20 @@ function backupDue() {
 }
 
 document.addEventListener('change', ev => {
-  if (ev.target.id !== 'import-file') return;
+  const el = ev.target;
+  // weight committed (blur / enter) — now project the ramp onto later sets
+  if (el.dataset && el.dataset.f === 'w' && S.active && route === 'workout') {
+    const i = +el.dataset.i, j = +el.dataset.j;
+    const ex = S.active.ex[i];
+    if (ex && ex.log[j]) {
+      autofillWeight(i, j);
+      if (i === firstWeightedIndex()) refreshWarmup(i);
+      refreshPlates(i);
+      save();
+    }
+    return;
+  }
+  if (el.id !== 'import-file') return;
   const file = ev.target.files[0];
   if (!file) return;
   const reader = new FileReader();

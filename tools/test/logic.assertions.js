@@ -226,4 +226,58 @@ assert(/\(bar\)/.test(warmupInner(85, true)), 'barbell ramp starts from the empt
 assert(/light enough/.test(warmupInner(30, false)), 'light dumbbell work skips the ramp');
 assert(plateRound(93) === 95, 'plateRound lands on loadable weight (' + plateRound(93) + ')');
 
+// --- weight ramp: what autofill projects onto the sets after the one you typed ---
+const blank = n => Array.from({ length: n }, () => ({ w: null, r: null, done: false }));
+function activeDbBench(rows) {
+  const def = findEx('db-bench');
+  const e = snapshot(def, assignParams(def, 45));
+  e.log = rows; e.sets = rows.length;
+  e.suggest = suggestFor(e);
+  S.active = { startedAt: Date.now(), groups: ['chest'], minutes: 45, est: 0, ex: [e] };
+  return e;
+}
+
+S.history = [];
+let rex = activeDbBench(blank(4));
+assert(setShape('db-bench', 4) === null, 'no history → no learned shape');
+assert(rampWeights(rex, 0, 30, 4).join() === '30,35,40,45', 'first time: one increment per set (' + rampWeights(rex, 0, 30, 4).join() + ')');
+assert(rampWeights(rex, 0, 32.5, 3).join() === '32.5,37.5,42.5', 'odd base keeps its offset');
+
+rex.log[0].w = 30;
+autofillWeight(0, 0);
+assert(rex.log.map(s => s.w).join() === '30,35,40,45', 'autofill projects the ramp (' + rex.log.map(s => s.w).join() + ')');
+rex.log[2].w = 50; rex.log[2].auto = false; // typed by hand
+rex.log[0].w = 40; autofillWeight(0, 0);
+assert(rex.log.map(s => s.w).join() === '40,45,50,55', 'a typed weight survives re-projection (' + rex.log.map(s => s.w).join() + ')');
+
+// today's per-set prescription is the shape to keep: typing a heavier set 1
+// scales the whole ramp instead of flattening it or filling nothing
+S.history = [perfEntry(2, [{ w: 95, r: 10 }, { w: 105, r: 10 }, { w: 115, r: 9 }])];
+rex = activeDbBench(blank(3));
+assert(rex.suggest.setW.join() === '95,105,115', 'prescription mirrors the logged ramp');
+assert(suggestedW(rex, 1) === 105, 'set rows pre-fill from the prescription');
+rex.log[0].w = 100;
+autofillWeight(0, 0);
+assert(rex.log.map(s => s.w).join() === '100,110,120', 'a heavier set 1 scales the prescribed ramp (' + rex.log.map(s => s.w).join() + ')');
+
+// with no prescription in hand, the averaged history supplies the shape
+S.history = [{ date: day(2), groups: ['chest'], minutes: 40, setCount: 3, volume: 0,
+  exercises: [{ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', targetReps: [8, 12],
+    sets: [{ w: 30, r: 12 }, { w: 40, r: 10 }, { w: 50, r: 8 }] }] }];
+assert(setShape('db-bench', 3).map(r => Math.round(r * 10) / 10).join() === '1,1.3,1.7', 'shape learned from one session');
+const bare = { id: 'db-bench', log: blank(4), sets: 4, suggest: null };
+// ×1, ×1.33, ×1.67, and a 4th set carries the same step on to ×2
+assert(rampWeights(bare, 0, 40, 4).join() === '40,55,65,80', 'learned ramp scales to a new base (' + rampWeights(bare, 0, 40, 4).join() + ')');
+S.active = null;
+
+// --- rest is 1½ min for lifting, on every goal and session length ---
+['fitness', 'muscle', 'strength'].forEach(g => {
+  S.profile.goal = g;
+  assert(assignParams(findEx('bb-squat'), 45).rest === 90, g + ': compound rests 90s');
+  assert(assignParams(findEx('db-curl'), 45).rest === 90, g + ': isolation rests 90s');
+  assert(assignParams(findEx('bb-squat'), 30).rest === 90, g + ': short session keeps 90s');
+});
+S.profile.goal = 'muscle';
+assert(restText(90) === '1½ min', 'rest reads as 1½ min (' + restText(90) + ')');
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');
