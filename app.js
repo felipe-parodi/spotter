@@ -22,6 +22,8 @@ function defaultState() {
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
     sel: { groups: ['full'], minutes: 45 },
+    // weekly schedule: days keyed 0(Sun)–6(Sat) → {split, minutes|null}; absent = rest
+    schedule: { enabled: false, minutes: 45, cardioDay: false, variant: 0, days: {} },
     // optional cycle-aware mode (female profiles) — see cycle notes in README
     cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], checkins: [] },
   };
@@ -46,6 +48,7 @@ function loadState() {
         s.settings.equipment || {});
       s.custom = parsed.custom || [];
       s.notes = parsed.notes || {};
+      s.schedule = Object.assign(defaultState().schedule, parsed.schedule || {});
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
       s.bodyLog = parsed.bodyLog || [];
       delete s.lastSummary; // older versions persisted a copy of history[0]
@@ -469,22 +472,36 @@ function levelOK(ex) {
   return S.profile.level === 'experienced' ? true : ex.lvl <= 2;
 }
 
-/* Most recent logged performance for an exercise. */
-function lastPerf(exId) {
+/* Most recent logged performances for an exercise, newest first. */
+function lastPerfs(exId, n) {
+  const out = [];
   for (const w of S.history) {
     const ex = (w.exercises || []).find(e => e.id === exId && e.sets && e.sets.length);
-    if (ex) {
-      const weights = ex.sets.map(s => s.w).filter(x => typeof x === 'number' && x > 0);
-      const topW = weights.length ? Math.max(...weights) : null;
-      const allHit = ex.targetReps ? ex.sets.every(s => (s.r || 0) >= ex.targetReps[1]) : false;
-      return { topW, allHit, sets: ex.sets, date: w.date };
-    }
+    if (!ex) continue;
+    const weights = ex.sets.map(s => s.w).filter(x => typeof x === 'number' && x > 0);
+    const topW = weights.length ? Math.max(...weights) : null;
+    const allHit = ex.targetReps ? ex.sets.every(s => (s.r || 0) >= ex.targetReps[1]) : false;
+    const badMiss = ex.targetReps ? ex.sets.some(s => (s.r || 0) <= ex.targetReps[0] - 3) : false;
+    out.push({ topW, allHit, badMiss, sets: ex.sets, date: w.date });
+    if (out.length >= n) break;
   }
-  return null;
+  return out;
 }
 
+function lastPerf(exId) { return lastPerfs(exId, 1)[0] || null; }
+
+/* Weight prescription from history. Rules, first match wins:
+   never done → pick your own · 4+ weeks away → ease back at 90% ·
+   3 sessions stuck at one weight → deload 10% · hard miss last time →
+   solidify at ~92.5% · every target hit → +increment on every set ·
+   otherwise → mirror last session set-for-set. Readiness (check-in)
+   scales whatever comes out. setW is the per-set prescription.
+   TODO(#5 from the suggestion-engine plan): starting-weight estimates for
+   never-done exercises, seeded from related lifts via a small ratio table
+   (e.g. incline DB press ≈ 85% of flat DB bench). */
 function suggestFor(ex) {
-  const perf = lastPerf(ex.id);
+  const perfs = lastPerfs(ex.id, 3);
+  const perf = perfs[0];
   const step = incrFor(findEx(ex.id) || ex); // snapshots don't carry incr
   const ease = readinessLoad();
   const easeNote = ease < 1 ? ' · lighter today' : '';
@@ -495,16 +512,36 @@ function suggestFor(ex) {
   const lastTxt = perf.topW
     ? 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + (detail ? ' × ' + detail : '')
     : (detail ? 'Last: ' + detail + timeUnit(ex) : null);
-  if (perf.allHit && perf.topW && step) {
-    const target = ease < 1 ? roundW((perf.topW + step) * ease) : perf.topW + step;
-    return { w: target, note: lastTxt + ' — every target hit. Today: ' + fmtW(target) + ' ' + unitLabel() + (ease < 1 ? easeNote : ' ↑'), up: ease >= 1 };
+  const adj = w => ease < 1 ? roundW(w * ease) : w;
+  const mirror = fallback => perf.sets.map(s => (typeof s.w === 'number' && s.w > 0) ? adj(s.w) : fallback);
+
+  if (perf.topW && step) {
+    const weeks = Math.floor((Date.now() - new Date(perf.date).getTime()) / (7 * DAY_MS));
+    if (weeks >= 4) {
+      const w = roundW(adj(perf.topW * 0.9));
+      return { w, note: lastTxt + ' — that was ' + weeks + ' weeks ago. Easing back in at ' + fmtW(w) + ' ' + unitLabel() + '.', up: false };
+    }
+    if (perfs.length >= 3 && perfs.every(p => p.topW === perf.topW && !p.allHit)) {
+      const w = roundW(adj(perf.topW * 0.9));
+      return { w, note: 'Stuck at ' + fmtW(perf.topW) + ' for 3 sessions — deload to ' + fmtW(w) + ' ' + unitLabel() + ' and build back up.', up: false };
+    }
+    if (perf.badMiss) {
+      const w = roundW(adj(perf.topW * 0.925));
+      return { w, note: lastTxt + ' — tough one. Solidify at ' + fmtW(w) + ' ' + unitLabel() + ' before pushing on.', up: false };
+    }
+    if (perf.allHit) {
+      const bump = w => ease < 1 ? roundW((w + step) * ease) : w + step;
+      const target = bump(perf.topW);
+      const setW = perf.sets.map(s => (typeof s.w === 'number' && s.w > 0) ? bump(s.w) : target);
+      return { w: target, setW, note: lastTxt + ' — every target hit. Today: ' + fmtW(target) + ' ' + unitLabel() + (ease < 1 ? easeNote : ' ↑'), up: ease >= 1 };
+    }
   }
   if (perf.allHit && !step) {
     const bump = (ex.cardio || ex.hiit) ? '2–3 min or a notch of intensity' : ex.mode === 'time' ? '5–10 sec' : '1–2 reps';
     return { w: null, note: lastTxt + ' — every target hit. Add ' + bump + ' ↑', up: true };
   }
-  const w = ease < 1 && perf.topW ? roundW(perf.topW * ease) : perf.topW;
-  return { w, note: lastTxt + easeNote, up: false };
+  const w = perf.topW ? adj(perf.topW) : null;
+  return { w, setW: perf.topW ? mirror(w) : null, note: lastTxt + easeNote, up: false };
 }
 
 /* ---------------- workout generator ---------------- */
@@ -685,6 +722,174 @@ function suggestSplit() {
   return null;
 }
 
+/* ---------------- weekly scheduler ----------------
+   Assigns SPLITS to chosen weekdays, minimizing muscle overlap on
+   back-to-back days so every muscle gets ~48h before it's hit again. */
+
+const MUSCLE_WT = { chest: 3, back: 3, quads: 3, hamstrings: 3, glutes: 3, shoulders: 3, biceps: 1, triceps: 1, core: 1, calves: 1 };
+
+function splitMuscles(key) {
+  const out = new Set();
+  for (const gid of (SPLITS[key] ? SPLITS[key].groups : [])) {
+    const ui = UI_GROUPS.find(u => u.id === gid);
+    if (ui) ui.muscles.forEach(m => out.add(m));
+  }
+  return out;
+}
+
+/* Penalty for training two splits on back-to-back days. */
+function splitConflict(a, b) {
+  if (a === 'cardio' || b === 'cardio') return 0;
+  const ma = splitMuscles(a), mb = splitMuscles(b);
+  let p = 0;
+  for (const m of ma) if (mb.has(m)) p += MUSCLE_WT[m] || 1;
+  if (a === 'full' || b === 'full') p += 4; // full body wants rest on both sides
+  if (a === b) p += 6;
+  return p;
+}
+
+/* Total adjacency penalty for a week assignment {dayIdx: splitKey}.
+   Consecutive calendar days only, Sun→Mon wraps around. */
+function weekScore(assign) {
+  const idxs = Object.keys(assign).map(Number).sort((x, y) => x - y);
+  if (idxs.length < 2) return 0;
+  let s = 0;
+  for (let i = 0; i < idxs.length; i++) {
+    const d1 = idxs[i], d2 = idxs[(i + 1) % idxs.length];
+    const gap = ((d2 - d1) + 7) % 7 || 7;
+    if (gap === 1) s += splitConflict(assign[d1], assign[d2]);
+  }
+  return s;
+}
+
+function hasAdjacentDays(days) {
+  const set = new Set(days);
+  return days.some(d => set.has((d + 1) % 7));
+}
+
+/* Distinct orderings of a template (duplicates collapse: full×3 → 1 perm). */
+function uniquePerms(arr) {
+  if (arr.length > 6) return [arr];
+  const out = [];
+  const rec = (rest, acc) => {
+    if (!rest.length) { out.push(acc.slice()); return; }
+    const used = new Set();
+    for (let i = 0; i < rest.length; i++) {
+      if (used.has(rest[i])) continue;
+      used.add(rest[i]);
+      acc.push(rest[i]);
+      rec(rest.slice(0, i).concat(rest.slice(i + 1)), acc);
+      acc.pop();
+    }
+  };
+  rec(arr, []);
+  return out;
+}
+
+/* Best week for the chosen weekdays. variant=n returns the n-th best
+   distinct assignment (Reshuffle). Returns {assign, score} or null. */
+function buildWeek(dayIdxs, wantCardio, variant) {
+  const days = Array.from(new Set(dayIdxs)).sort((a, b) => a - b);
+  if (!days.length) return null;
+  if (days.length === 7) wantCardio = true; // seven straight lifting days: force one recovery day
+  const candidates = [];
+  const seen = new Set();
+  const consider = (sDays, cardioDay) => {
+    const n = sDays.length;
+    if (!n) return;
+    let tpl = (n === 3 && hasAdjacentDays(sDays)) ? SPLIT_TEMPLATES['3adj'] : SPLIT_TEMPLATES[Math.min(n, 6)];
+    tpl = tpl.slice(0, Math.min(n, tpl.length));
+    while (tpl.length < n) tpl = tpl.concat('full'); // >6 strength days (rare)
+    for (const order of uniquePerms(tpl)) {
+      const assign = {};
+      sDays.forEach((d, i) => { assign[d] = order[i]; });
+      if (cardioDay != null) assign[cardioDay] = 'cardio';
+      const key = JSON.stringify(assign);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ assign, score: weekScore(assign) });
+    }
+  };
+  if (wantCardio && days.length >= 2) {
+    for (const c of days) consider(days.filter(d => d !== c), c);
+  } else consider(days, null);
+  candidates.sort((a, b) => a.score - b.score);
+  return candidates[(variant || 0) % candidates.length] || null;
+}
+
+/* Re-run the scheduler over the currently chosen days (keeps per-day
+   minute overrides, replaces split assignments). */
+function rebuildSchedule() {
+  const sc = S.schedule;
+  const chosen = Object.keys(sc.days).map(Number);
+  if (!chosen.length) { save(); return; }
+  const res = buildWeek(chosen, sc.cardioDay, sc.variant || 0);
+  if (!res) { save(); return; }
+  for (const d of chosen) {
+    const prevMin = sc.days[d] && sc.days[d].minutes;
+    sc.days[d] = { split: res.assign[d], minutes: prevMin || null };
+  }
+  save();
+}
+
+function schedPlanFor(dayIdx) {
+  const p = S.schedule.days[dayIdx];
+  if (!p || !SPLITS[p.split]) return null;
+  return { split: p.split, label: SPLITS[p.split].label, groups: SPLITS[p.split].groups.slice(), minutes: p.minutes || S.schedule.minutes || 45 };
+}
+
+function scheduleToday() {
+  if (!S.schedule.enabled) return null;
+  return schedPlanFor(new Date().getDay());
+}
+
+function trainedOnDate(d) {
+  const t0 = new Date(d); t0.setHours(0, 0, 0, 0);
+  const from = t0.getTime(), to = from + DAY_MS;
+  return S.history.some(w => { const t = new Date(w.date).getTime(); return t >= from && t < to; });
+}
+
+/* The most recently missed scheduled lift, if swapping it in today is safe
+   (i.e. yesterday's training didn't already hit those muscles hard). */
+function missedSplit() {
+  if (!S.schedule.enabled) return null;
+  const now = new Date();
+  if (trainedOnDate(now)) return null;
+  for (let back = 1; back <= 3; back++) {
+    const d = new Date(now); d.setDate(d.getDate() - back);
+    const plan = S.schedule.days[d.getDay()];
+    if (!plan) continue;
+    if (trainedOnDate(d)) return null; // most recent scheduled day was done — nothing missed
+    if (plan.split === 'cardio') continue;
+    const y = new Date(now); y.setDate(y.getDate() - 1);
+    if (trainedOnDate(y)) {
+      const t0 = new Date(y); t0.setHours(0, 0, 0, 0);
+      const yEntry = S.history.find(w => { const t = new Date(w.date).getTime(); return t >= t0.getTime() && t < t0.getTime() + DAY_MS; });
+      const trained = new Set();
+      ((yEntry && yEntry.exercises) || []).forEach(e => { const def = findEx(e.id); if (def) def.m.forEach(m => trained.add(m)); });
+      let clash = 0;
+      splitMuscles(plan.split).forEach(m => { if (trained.has(m)) clash += MUSCLE_WT[m] || 1; });
+      if (clash >= 3) return null;
+    }
+    return schedPlanFor(d.getDay());
+  }
+  return null;
+}
+
+/* Warn (never block) when a manual edit puts the same muscles on adjacent days. */
+function schedWarning(d) {
+  const p = S.schedule.days[d];
+  if (!p) return '';
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  for (const n of [(d + 6) % 7, (d + 1) % 7]) {
+    const q = S.schedule.days[n];
+    if (q && splitConflict(p.split, q.split) >= 3) {
+      return '⚠ Heavy overlap with ' + names[n] + '’s ' + SPLITS[q.split].label.toLowerCase() + ' — same muscles two days running.';
+    }
+  }
+  return '';
+}
+
 /* ---------------- workout lifecycle ---------------- */
 
 let lastFinished = null; // the just-finished session, for cooldown/summary
@@ -740,11 +945,7 @@ function setDone(i, j) {
   s.done = !s.done;
   if (s.done) {
     if (navigator.vibrate) navigator.vibrate(10); // tactile tick
-    if (s.w == null) {
-      const plan = weightPlan(ex);
-      const w = (plan && plan[j]) || (ex.suggest && ex.suggest.w);
-      if (w) { s.w = w; s.auto = true; }
-    }
+    if (s.w == null) { const sw = suggestedW(ex, j); if (sw) { s.w = sw; s.auto = true; } }
     if (s.w != null) autofillWeight(i, j); // ticking a set also settles the ones after it
     if (s.r == null) s.r = ex.reps[1];
     const isLastSet = i === S.active.ex.length - 1 && j === ex.log.length - 1;
@@ -1321,7 +1522,7 @@ function viewToday() {
   const mins = [30, 45, 60].map(m =>
     '<button data-v="' + m + '"' + (S.sel.minutes === m ? ' class="on"' : '') + '>' + m + ' min</button>'
   ).join('');
-  const sug = suggestSplit();
+  const sug = S.schedule.enabled ? null : suggestSplit(); // the schedule owns the suggestion when it's on
   const sugLine = (sug && !S.active) ? `
     <div class="hint">Last session: ${esc(sug.lastLabel)}, ${sug.when}.
     Today could be <button data-a="use-split" data-g="${sug.groups.join(',')}">${esc(sug.label)}</button>.</div>` : '';
@@ -1333,6 +1534,7 @@ function viewToday() {
       <p class="muted small">${st.count} session${st.count === 1 ? '' : 's'} this week${ds >= 2 ? ' · 🔥 ' + ds + '-day streak' : st.streak > 1 ? ' · ' + st.streak + '-week streak' : ''}</p></div>
     </header>
     ${resume}
+    ${scheduleBanner()}
     ${backupBanner()}
     ${cycleBanner()}
     ${checkinCard()}
@@ -1378,6 +1580,48 @@ function groupLabels(ids) {
   if (ids.includes('hiit')) return 'HIIT';
   const labels = UI_GROUPS.filter(g => ids.includes(g.id)).map(g => g.label);
   return labels.length ? labels.join(' + ') : 'Session';
+}
+
+/* Mon-first mini week: accent = training day, ✓ = trained, ring = today. */
+function weekStripHTML() {
+  const letters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const today = new Date().getDay();
+  const monday = weekStart(new Date());
+  return '<div class="wk-strip">' + order.map((d, i) => {
+    const plan = S.schedule.days[d];
+    const done = trainedOnDate(new Date(monday + i * DAY_MS));
+    const cls = 'wk-day' + (plan ? ' train' : '') + (done ? ' did' : '') + (d === today ? ' now' : '');
+    const title = plan ? SPLITS[plan.split].label : 'Rest';
+    return '<span class="' + cls + '" title="' + esc(title) + '">' + (done ? '✓' : letters[i]) + '</span>';
+  }).join('') + '</div>';
+}
+
+function scheduleBanner() {
+  if (!S.schedule.enabled || S.active) return '';
+  const strip = weekStripHTML();
+  const plan = scheduleToday();
+  if (plan) {
+    return `
+    <section class="card sched">
+      <div class="sched-head">
+        <div><div class="kicker">On today’s plan</div>
+        <strong>${esc(plan.label)} · ${plan.minutes} min</strong></div>
+        ${strip}
+      </div>
+      <button class="btn-primary" data-a="sched-build">${dumbbellSVG()} Build today’s workout</button>
+    </section>`;
+  }
+  const miss = missedSplit();
+  return `
+  <section class="card sched rest">
+    <div class="sched-head">
+      <div><div class="kicker">Rest day</div>
+      <strong>${miss ? 'Nothing scheduled today' : 'Recovery is training too'}</strong></div>
+      ${strip}
+    </div>
+    ${miss ? '<div class="hint">You missed ' + esc(miss.label) + ' — <button data-a="sched-catchup">swap it in today</button>?</div>' : ''}
+  </section>`;
 }
 
 function cycleBanner() {
@@ -1529,24 +1773,53 @@ function firstWeightedIndex() {
   return S.active.ex.findIndex(e => e.mode !== 'time' && weightApplies(e));
 }
 
-function warmupInner(w) {
-  if (w) {
-    return '<strong>Warm-up sets</strong> · 8 × ' + fmtW(roundW(w * 0.5)) +
-      ' · 5 × ' + fmtW(roundW(w * 0.75)) + ' ' + unitLabel() + ', then working sets below';
+/* Nearest weight loadable with 2.5s per side on a standard bar. */
+function plateRound(w) {
+  const bar = unitLabel() === 'kg' ? 20 : 45;
+  if (w <= bar) return bar;
+  return bar + Math.round((w - bar) / 2 / 2.5) * 5;
+}
+
+/* Warm-up ramp scaled to the load: light weights skip the ceremony, heavy
+   work gets a third step, barbell steps land on plate-loadable numbers. */
+function warmupInner(w, barbell) {
+  if (!w) return '<strong>Warm-up sets</strong> · two light ramp-up sets of 8 before the working sets';
+  const kg = unitLabel() === 'kg';
+  const light = kg ? 18 : 40, heavy = kg ? 68 : 150, bar = kg ? 20 : 45;
+  if (w <= light && !barbell) return '<strong>Warm-up sets</strong> · one easy set of 8 — light enough to get right into it';
+  const steps = w > heavy ? [[0.4, 10], [0.6, 8], [0.8, 5]] : [[0.5, 8], [0.75, 5]];
+  const parts = [];
+  let prev = null;
+  for (const [f, reps] of steps) {
+    let txt, val;
+    if (barbell) {
+      val = Math.max(bar, plateRound(w * f));
+      const side = (val - bar) / 2;
+      txt = reps + ' × ' + fmtW(val) + (side > 0 ? ' (' + fmtW(side) + '/side)' : ' (bar)');
+    } else {
+      val = roundW(w * f);
+      txt = reps + ' × ' + fmtW(val);
+    }
+    if (val !== prev) parts.push(txt); // collapse steps that round to the same load
+    prev = val;
   }
-  return '<strong>Warm-up sets</strong> · two light ramp-up sets of 8 before the working sets';
+  return '<strong>Warm-up sets</strong> · ' + parts.join(' · ') + ' ' + unitLabel() + ', then working sets below';
+}
+
+function isBarbell(e) {
+  const def = findEx(e.id);
+  return !!(def && def.eq && def.eq.includes('barbell'));
 }
 
 function warmupSetsHTML(e, i) {
   if (i !== firstWeightedIndex()) return '';
-  return '<div class="warmup-line">' + warmupInner(e.suggest && e.suggest.w) + '</div>';
+  return '<div class="warmup-line">' + warmupInner(e.suggest && e.suggest.w, isBarbell(e)) + '</div>';
 }
 
 function exerciseCard(e, i) {
   const done = e.log.every(s => s.done) && e.log.length;
   const sugg = e.suggest || {};
-  const plan = weightPlan(e); // computed once per card — setShape walks history
-  const rows = e.log.map((s, j) => setRow(e, i, s, j, plan)).join('');
+  const rows = e.log.map((s, j) => setRow(e, i, s, j)).join('');
   const canSwap = !!EXERCISES.find(x => x.id === e.id);
   return `
   <section class="card ex-card${done ? ' done' : ''}" id="ex-${i}">
@@ -1574,10 +1847,18 @@ function exerciseCard(e, i) {
   </section>`;
 }
 
-function setRow(e, i, s, j, plan) {
+/* Per-set suggested weight: the setW ramp when one exists, else the top-set number. */
+function suggestedW(e, j) {
+  const sug = e.suggest;
+  if (!sug) return null;
+  if (sug.setW && sug.setW.length) return sug.setW[Math.min(j, sug.setW.length - 1)];
+  return sug.w || null;
+}
+
+function setRow(e, i, s, j) {
   const showWeight = e.mode !== 'time' && weightApplies(e);
-  const sugg = (plan && plan[j]) || (e.suggest && e.suggest.w);
-  const wVal = s.w != null ? ' value="' + s.w + '"' : (sugg ? ' value="' + sugg + '"' : '');
+  const sugW = suggestedW(e, j);
+  const wVal = s.w != null ? ' value="' + s.w + '"' : (sugW ? ' value="' + sugW + '"' : '');
   const rVal = s.r != null ? ' value="' + s.r + '"' : '';
   return `
   <div class="set-row${s.done ? ' done' : ''}" id="set-${i}-${j}">
@@ -1681,12 +1962,29 @@ function setShape(exId, n) {
   return r;
 }
 
+/* The shape to project, best source first: today's per-set prescription from
+   suggestFor (it already folds in deloads, easing back, and +increment), then
+   the averaged history, then nothing — which rampWeights reads as "ramp by one
+   increment per set". */
+function shapeFor(ex, n) {
+  const sw = ex.suggest && ex.suggest.setW;
+  if (sw && sw.length && sw[0] > 0) {
+    const r = [];
+    for (let k = 0; k < n; k++) {
+      const v = sw[Math.min(k, sw.length - 1)]; // past the prescription, hold the last set
+      r[k] = v > 0 ? v / sw[0] : 1;
+    }
+    return r;
+  }
+  return setShape(ex.id, n);
+}
+
 /* Weights for sets `from`…`from + count - 1`, given `base` on set `from`.
-   Learned shape when we have one, otherwise one increment per set. Only the
+   Keeps the shape when we know one, otherwise one increment per set. Only the
    change from `base` snaps to the increment, so an odd base (32.5) stays put. */
 function rampWeights(ex, from, base, count) {
   const step = incrFor(findEx(ex.id) || ex) || 2.5;
-  const shape = setShape(ex.id, from + count);
+  const shape = shapeFor(ex, from + count);
   const out = [];
   for (let k = 0; k < count; k++) {
     const i = from + k;
@@ -1698,24 +1996,11 @@ function rampWeights(ex, from, base, count) {
   return out;
 }
 
-/* Pre-filled weights for a card you haven't touched yet: last sessions' ramp
-   carried forward, peaking at the weight suggestFor already picked for today. */
-function weightPlan(e) {
-  const top = e.suggest && e.suggest.w;
-  const n = e.log ? e.log.length : e.sets;
-  if (!top || !(n > 1)) return null;
-  const shape = setShape(e.id, n);
-  if (!shape) return null;
-  const peak = Math.max.apply(null, shape.slice(0, n));
-  if (!(peak > 0)) return null;
-  const step = incrFor(findEx(e.id) || e) || 2.5;
-  const base = Math.max(step, top - Math.round((top - top / peak) / step) * step);
-  return rampWeights(e, 0, base, n);
-}
-
-/* When you set a weight, project the rest of the ramp onto the sets after it.
-   Guesses are flagged `auto` so a later correction re-projects over them; a
-   number you typed yourself is never overwritten. */
+/* When you set a weight, project the rest of the ramp onto the sets after it —
+   scaled to what you actually typed, so entering a different set 1 keeps the
+   prescribed shape instead of flattening or ignoring it. Guesses are flagged
+   `auto` so a later correction re-projects over them; a number you typed
+   yourself is never overwritten. */
 function autofillWeight(i, j) {
   const ex = S.active.ex[i];
   const base = ex.log[j].w;
@@ -1736,7 +2021,7 @@ function autofillWeight(i, j) {
 function refreshWarmup(i) {
   const line = document.querySelector('#ex-' + i + ' .warmup-line');
   if (!line) return;
-  line.innerHTML = warmupInner(workingWeight(S.active.ex[i]));
+  line.innerHTML = warmupInner(workingWeight(S.active.ex[i]), isBarbell(S.active.ex[i]));
 }
 
 /* Update just the touched row + header, so inputs elsewhere keep focus/state */
@@ -2257,6 +2542,7 @@ function viewProfile() {
         </label>
       </div>
     </section>
+    ${scheduleSettings()}
     ${cycleSettings()}
     <section class="card">
       <h2>Gym equipment</h2>
@@ -2276,6 +2562,60 @@ function viewProfile() {
     <p class="fine">Spotter · works offline · demo photos from the public-domain free-exercise-db</p>
   </div>
   ${tabbar('profile')}`;
+}
+
+function scheduleSettings() {
+  const sc = S.schedule;
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const pills = order.map(d =>
+    '<button class="chip' + (sc.days[d] ? ' on' : '') + '" data-a="sched-day" data-d="' + d + '">' + dayNames[d] + '</button>').join('');
+  let rows = '';
+  if (sc.enabled) {
+    rows = order.filter(d => sc.days[d]).map(d => {
+      const p = sc.days[d];
+      const editing = S._schedEdit === d;
+      const warn = schedWarning(d);
+      let editor = '';
+      if (editing) {
+        const splitBtns = Object.keys(SPLITS).map(k =>
+          '<button class="chip' + (p.split === k ? ' on' : '') + '" data-a="sched-split" data-d="' + d + '" data-v="' + k + '">' + SPLITS[k].label + '</button>').join('');
+        const minBtns = [30, 45, 60].map(m =>
+          '<button class="chip' + ((p.minutes || sc.minutes) === m ? ' on' : '') + '" data-a="sched-mins" data-d="' + d + '" data-v="' + m + '">' + m + ' min</button>').join('');
+        editor = '<div class="sched-editor"><div class="chips">' + splitBtns + '</div><div class="chips">' + minBtns + '</div></div>';
+      }
+      return `
+      <div class="sched-row${editing ? ' open' : ''}">
+        <button class="sched-row-head" data-a="sched-edit" data-d="${d}">
+          <span class="sched-dayname">${dayNames[d]}</span>
+          <span class="sched-split">${esc(SPLITS[p.split].label)}</span>
+          <span class="muted small">${p.minutes || sc.minutes} min</span>
+          <span class="chev">${editing ? '⌄' : '›'}</span>
+        </button>
+        ${warn ? '<div class="sched-warn">' + esc(warn) + '</div>' : ''}
+        ${editor}
+      </div>`;
+    }).join('');
+  }
+  return `
+  <section class="card">
+    <h2>Weekly schedule</h2>
+    <p class="muted small">Pick your training days and Spotter plans the week — spacing muscle groups so nothing gets hammered two days in a row, and keeping rest days restful. Tap a planned day to change its focus or length.</p>
+    <label class="switch-row"><span>Enable weekly schedule</span>
+      <input type="checkbox" data-f="sched-enabled" ${sc.enabled ? 'checked' : ''}><i></i>
+    </label>
+    ${sc.enabled ? `
+      <div class="chips mt">${pills}</div>
+      <label class="field mt"><span>Session length</span>
+        <div class="seg" id="sched-min">${[30, 45, 60].map(m => '<button data-v="' + m + '"' + (sc.minutes === m ? ' class="on"' : '') + '>' + m + ' min</button>').join('')}</div>
+      </label>
+      <label class="switch-row"><span>Include a cardio day</span>
+        <input type="checkbox" data-f="sched-cardio" ${sc.cardioDay ? 'checked' : ''}><i></i>
+      </label>
+      ${rows ? '<div class="sched-rows">' + rows + '</div>' : '<p class="fine">Pick at least one training day above.</p>'}
+      ${Object.keys(sc.days).length >= 2 ? '<button class="btn-ghost" data-a="sched-reshuffle">Reshuffle the week</button>' : ''}
+    ` : ''}
+  </section>`;
 }
 
 function cycleSettings() {
@@ -2323,6 +2663,7 @@ document.addEventListener('click', ev => {
     seg.querySelectorAll('button').forEach(b => b.classList.remove('on'));
     segBtn.classList.add('on');
     if (seg.id === 'min-seg') { S.sel.minutes = +segBtn.dataset.v; save(); }
+    if (seg.id === 'sched-min') { S.schedule.minutes = +segBtn.dataset.v; save(); render(); }
     if (seg.id === 'ob-units') {
       const bw = $('#ob-bw');
       if (bw) bw.placeholder = segBtn.dataset.v === 'kg' ? 'e.g. 68' : 'e.g. 150';
@@ -2396,6 +2737,49 @@ document.addEventListener('click', ev => {
   else if (a === 'restorative') {
     S.draft = restorativePlan();
     save(); go('preview');
+  }
+
+  else if (a === 'sched-build' || a === 'sched-catchup') {
+    const p = a === 'sched-build' ? scheduleToday() : missedSplit();
+    if (!p) return;
+    S.sel.groups = p.groups; S.sel.minutes = p.minutes;
+    S.draft = generateWorkout(p.groups, p.minutes);
+    if (!S.draft.ex.length) { toast('Nothing matches — check equipment settings in Profile.'); return; }
+    save(); go('preview');
+  }
+
+  else if (a === 'sched-day') {
+    const d = +el.dataset.d;
+    if (S.schedule.days[d]) delete S.schedule.days[d];
+    else S.schedule.days[d] = { split: 'full', minutes: null };
+    S.schedule.variant = 0;
+    S._schedEdit = null;
+    rebuildSchedule(); render();
+  }
+
+  else if (a === 'sched-reshuffle') {
+    S.schedule.variant = (S.schedule.variant || 0) + 1;
+    rebuildSchedule(); render();
+  }
+
+  else if (a === 'sched-edit') {
+    const d = +el.dataset.d;
+    S._schedEdit = S._schedEdit === d ? null : d;
+    render();
+  }
+
+  else if (a === 'sched-split') {
+    const p = S.schedule.days[+el.dataset.d];
+    if (p) { p.split = el.dataset.v; save(); render(); }
+  }
+
+  else if (a === 'sched-mins') {
+    const p = S.schedule.days[+el.dataset.d];
+    if (p) {
+      const v = +el.dataset.v;
+      p.minutes = v === S.schedule.minutes ? null : v;
+      save(); render();
+    }
   }
 
   else if (a === 'freestyle') startFreestyle();
@@ -2595,6 +2979,18 @@ document.addEventListener('input', ev => {
       else s.r = el.value === '' ? null : +el.value;
       save(); // derived totals recompute on Done
     }
+  } else if (f === 'sched-enabled') {
+    S.schedule.enabled = el.checked;
+    if (el.checked && !Object.keys(S.schedule.days).length) {
+      // a friendly starting point: Mon/Wed/Fri
+      S.schedule.days = { 1: { split: 'full', minutes: null }, 3: { split: 'full', minutes: null }, 5: { split: 'full', minutes: null } };
+      rebuildSchedule();
+    }
+    save(); render();
+  } else if (f === 'sched-cardio') {
+    S.schedule.cardioDay = el.checked;
+    S.schedule.variant = 0;
+    rebuildSchedule(); render();
   } else if (f === 'exnote') {
     const v = el.value.trim();
     if (v) S.notes[el.dataset.id] = v; else delete S.notes[el.dataset.id];
@@ -2730,7 +3126,7 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 
 /* ---------------- boot ---------------- */
 
-delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; // transient view state, fresh each launch
+delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; S._schedEdit = null; // transient view state, fresh each launch
 applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();

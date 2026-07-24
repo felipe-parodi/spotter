@@ -141,47 +141,133 @@ function exerciseCardSafe() {
   return html.includes('Plates: 45 per side') && html.includes('Add a note');
 }
 
-// --- weight ramp: default, learned, and what it refuses to overwrite ---
-function activeDbBench(logRows) {
-  const def = findEx('db-bench');
-  const entry = snapshot(def, assignParams(def, 45));
-  entry.log = logRows;
-  entry.sets = logRows.length;
-  entry.suggest = suggestFor(entry);
-  S.active = { startedAt: Date.now(), groups: ['chest'], minutes: 45, est: 0, ex: [entry] };
-  return entry;
-}
+// --- weekly scheduler ---
+let wk = buildWeek([1, 3, 5], false, 0); // Mon/Wed/Fri
+assert(Object.values(wk.assign).every(s => s === 'full'), 'MWF → full body ×3');
+assert(wk.score === 0, 'MWF has zero conflict (' + wk.score + ')');
+
+wk = buildWeek([1, 2, 4, 5], false, 0); // Mon/Tue + Thu/Fri
+assert(wk.score === 0, '4-day upper/lower alternation avoids all overlap (' + wk.score + ')');
+const four = [wk.assign[1], wk.assign[2], wk.assign[4], wk.assign[5]];
+assert(four.filter(s => s === 'upper').length === 2 && four.filter(s => s === 'lower').length === 2, '4-day uses upper/lower ×2');
+assert(wk.assign[1] !== wk.assign[2] && wk.assign[4] !== wk.assign[5], 'adjacent days differ');
+
+wk = buildWeek([1, 2, 3, 4, 5, 6], false, 0); // six straight days → PPL×2
+assert(splitConflict(wk.assign[1], wk.assign[2]) < 3, '6-day: no heavy back-to-back overlap');
+assert(wk.score <= 8, '6-day PPL score acceptable (' + wk.score + ')');
+
+wk = buildWeek([1, 2, 3, 4, 5], true, 0);
+assert(Object.values(wk.assign).filter(s => s === 'cardio').length === 1, 'cardio day placed when requested');
+
+wk = buildWeek([0, 1, 2, 3, 4, 5, 6], false, 0);
+assert(Object.values(wk.assign).includes('cardio'), '7 lifting days forces a recovery/cardio day');
+
+assert(splitConflict('upper', 'upper') >= 9, 'same split adjacent scores high');
+assert(splitConflict('upper', 'lower') === 0, 'upper/lower do not conflict');
+assert(splitConflict('push', 'pull') <= 2, 'push/pull share only arms');
+
+S.schedule = { enabled: true, minutes: 45, cardioDay: false, variant: 0, days: { 1: { split: 'upper', minutes: null }, 2: { split: 'upper', minutes: null } } };
+assert(schedWarning(2).includes('Overlap') || schedWarning(2).includes('overlap'), 'manual back-to-back upper warns');
+
+// today's plan + banner render
+const todayIdx = new Date().getDay();
+S.schedule.days = {}; S.schedule.days[todayIdx] = { split: 'lower', minutes: null };
+S.history = [];
+const tp = scheduleToday();
+assert(tp && tp.label === 'Legs & glutes' && tp.minutes === 45, 'scheduleToday resolves plan');
+assert(scheduleBanner().includes('On today’s plan'), 'banner shows today’s plan');
+assert(viewProfile().includes('Weekly schedule'), 'profile shows schedule card');
+
+// missed-day catch-up: scheduled 2 days ago, nothing trained since
+const twoAgo = (todayIdx + 5) % 7;
+S.schedule.days = {}; S.schedule.days[twoAgo] = { split: 'pull', minutes: null };
+assert(missedSplit() && missedSplit().split === 'pull', 'missed day surfaces catch-up');
+// ...but not if yesterday's ad-hoc training already hit those muscles
+S.history = [{ date: day(1), groups: ['back'], minutes: 30, setCount: 3, volume: 0,
+  exercises: [{ id: 'bb-row', name: 'Row', mode: 'reps', sets: [{ w: 95, r: 8 }] }] }];
+assert(missedSplit() === null, 'catch-up suppressed after clashing session');
+S.schedule = defaultState().schedule;
+
+// --- suggestion engine ---
+const perfEntry = (daysAgo, sets, target) => ({
+  date: day(daysAgo), groups: ['chest'], minutes: 30, setCount: sets.length, volume: 0,
+  exercises: [{ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', targetReps: target || [8, 12], sets }],
+});
+const sugFor = () => suggestFor({ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', reps: [8, 12] });
+
+// staleness: 5 weeks away → 90%
+S.history = [perfEntry(36, [{ w: 100, r: 12 }, { w: 100, r: 12 }])];
+let sg = sugFor();
+assert(sg.w === 90 && /weeks ago/.test(sg.note), 'stale history eases back to 90% (' + sg.w + ')');
+
+// plateau: 3 sessions stuck → deload
+S.history = [perfEntry(2, [{ w: 100, r: 10 }]), perfEntry(5, [{ w: 100, r: 9 }]), perfEntry(8, [{ w: 100, r: 10 }])];
+sg = sugFor();
+assert(sg.w === 90 && /deload/i.test(sg.note), 'plateau triggers deload (' + sg.note + ')');
+
+// hard miss: solidify at 92.5%
+S.history = [perfEntry(2, [{ w: 100, r: 10 }, { w: 100, r: 5 }])];
+sg = sugFor();
+assert(sg.w === 92.5 && /Solidify/.test(sg.note), 'hard miss backs off to 92.5 (' + sg.w + ')');
+
+// per-set mirror of a ramp
+S.history = [perfEntry(2, [{ w: 95, r: 10 }, { w: 105, r: 10 }, { w: 115, r: 9 }])];
+sg = sugFor();
+assert(sg.w === 115 && sg.setW && sg.setW.join(',') === '95,105,115', 'per-set ramp mirrored (' + (sg.setW || []).join(',') + ')');
+
+// per-set progression when every target hit
+S.history = [perfEntry(2, [{ w: 95, r: 12 }, { w: 105, r: 12 }, { w: 115, r: 12 }])];
+sg = sugFor();
+assert(sg.w === 120 && sg.setW.join(',') === '100,110,120', 'progression applies +step per set (' + sg.setW.join(',') + ')');
+
+// warm-up ramp shapes
+assert(warmupInner(185, true).split('·').length >= 4 && /\/side/.test(warmupInner(185, true)), 'heavy barbell gets 3 plate-aware steps');
+assert(/\(bar\)/.test(warmupInner(85, true)), 'barbell ramp starts from the empty bar when 50% rounds to it');
+assert(/light enough/.test(warmupInner(30, false)), 'light dumbbell work skips the ramp');
+assert(plateRound(93) === 95, 'plateRound lands on loadable weight (' + plateRound(93) + ')');
+
+// --- weight ramp: what autofill projects onto the sets after the one you typed ---
 const blank = n => Array.from({ length: n }, () => ({ w: null, r: null, done: false }));
+function activeDbBench(rows) {
+  const def = findEx('db-bench');
+  const e = snapshot(def, assignParams(def, 45));
+  e.log = rows; e.sets = rows.length;
+  e.suggest = suggestFor(e);
+  S.active = { startedAt: Date.now(), groups: ['chest'], minutes: 45, est: 0, ex: [e] };
+  return e;
+}
 
 S.history = [];
-let ex = activeDbBench(blank(4));
+let rex = activeDbBench(blank(4));
 assert(setShape('db-bench', 4) === null, 'no history → no learned shape');
-assert(rampWeights(ex, 0, 30, 4).join() === '30,35,40,45', 'default ramp is one increment per set (' + rampWeights(ex, 0, 30, 4).join() + ')');
-assert(rampWeights(ex, 0, 32.5, 3).join() === '32.5,37.5,42.5', 'odd base keeps its offset');
+assert(rampWeights(rex, 0, 30, 4).join() === '30,35,40,45', 'first time: one increment per set (' + rampWeights(rex, 0, 30, 4).join() + ')');
+assert(rampWeights(rex, 0, 32.5, 3).join() === '32.5,37.5,42.5', 'odd base keeps its offset');
 
-ex.log[0].w = 30;
+rex.log[0].w = 30;
 autofillWeight(0, 0);
-assert(ex.log.map(s => s.w).join() === '30,35,40,45', 'autofill projects the ramp (' + ex.log.map(s => s.w).join() + ')');
-ex.log[2].w = 50; ex.log[2].auto = false; // typed by hand
-ex.log[0].w = 40; autofillWeight(0, 0);
-assert(ex.log.map(s => s.w).join() === '40,45,50,55', 'a typed weight survives re-projection (' + ex.log.map(s => s.w).join() + ')');
+assert(rex.log.map(s => s.w).join() === '30,35,40,45', 'autofill projects the ramp (' + rex.log.map(s => s.w).join() + ')');
+rex.log[2].w = 50; rex.log[2].auto = false; // typed by hand
+rex.log[0].w = 40; autofillWeight(0, 0);
+assert(rex.log.map(s => s.w).join() === '40,45,50,55', 'a typed weight survives re-projection (' + rex.log.map(s => s.w).join() + ')');
 
-// straight sets in history → learned shape overrides the default ramp
+// today's per-set prescription is the shape to keep: typing a heavier set 1
+// scales the whole ramp instead of flattening it or filling nothing
+S.history = [perfEntry(2, [{ w: 95, r: 10 }, { w: 105, r: 10 }, { w: 115, r: 9 }])];
+rex = activeDbBench(blank(3));
+assert(rex.suggest.setW.join() === '95,105,115', 'prescription mirrors the logged ramp');
+assert(suggestedW(rex, 1) === 105, 'set rows pre-fill from the prescription');
+rex.log[0].w = 100;
+autofillWeight(0, 0);
+assert(rex.log.map(s => s.w).join() === '100,110,120', 'a heavier set 1 scales the prescribed ramp (' + rex.log.map(s => s.w).join() + ')');
+
+// with no prescription in hand, the averaged history supplies the shape
 S.history = [{ date: day(2), groups: ['chest'], minutes: 40, setCount: 3, volume: 0,
   exercises: [{ id: 'db-bench', name: 'Dumbbell Bench Press', mode: 'reps', targetReps: [8, 12],
-    sets: [{ w: 40, r: 10 }, { w: 40, r: 10 }, { w: 40, r: 10 }] }] }];
-ex = activeDbBench(blank(4));
-assert(rampWeights(ex, 0, 30, 4).join() === '30,30,30,30', 'learned straight sets stay flat (' + rampWeights(ex, 0, 30, 4).join() + ')');
-
-// an ascending session teaches the ascending shape, from the very first session
-S.history[0].exercises[0].sets = [{ w: 30, r: 12 }, { w: 40, r: 10 }, { w: 50, r: 8 }];
-ex = activeDbBench(blank(4));
+    sets: [{ w: 30, r: 12 }, { w: 40, r: 10 }, { w: 50, r: 8 }] }] }];
 assert(setShape('db-bench', 3).map(r => Math.round(r * 10) / 10).join() === '1,1.3,1.7', 'shape learned from one session');
-// 30/40/50 → ×1, ×1.33, ×1.67, and a 4th set carries the same step on to ×2
-assert(rampWeights(ex, 0, 40, 4).join() === '40,55,65,80', 'learned ramp scales to a new base (' + rampWeights(ex, 0, 40, 4).join() + ')');
-const wplan = weightPlan(ex);
-assert(wplan && Math.max.apply(null, wplan) === ex.suggest.w, "plan peaks at today's suggested weight (" + wplan + " vs " + ex.suggest.w + ")");
-assert(setRow(ex, 0, ex.log[0], 0, wplan).includes('value="' + wplan[0] + '"'), 'set row pre-fills its planned weight');
+const bare = { id: 'db-bench', log: blank(4), sets: 4, suggest: null };
+// ×1, ×1.33, ×1.67, and a 4th set carries the same step on to ×2
+assert(rampWeights(bare, 0, 40, 4).join() === '40,55,65,80', 'learned ramp scales to a new base (' + rampWeights(bare, 0, 40, 4).join() + ')');
 S.active = null;
 
 // --- rest is 1½ min for lifting, on every goal and session length ---
