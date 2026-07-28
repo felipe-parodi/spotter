@@ -20,6 +20,54 @@ const INSTRUCTIONS = {
 "Pause for a second without letting your hips rotate or your back arch.",
 "Return to the start and repeat with the opposite arm and leg. That is one rep per side."
 ],
+"pike-pushup": [
+"Start in a push-up position, then walk your feet in and push your hips up so your body makes an upside-down V.",
+"Keep your legs as straight as your hamstrings allow and your head between your arms.",
+"Bend your elbows and lower the crown of your head toward the floor just in front of your hands.",
+"Press back up until your arms are straight. Elevate your feet on a step to make it harder."
+],
+"shoulder-tap": [
+"Set up in a high plank with hands under your shoulders and feet wider than usual for stability.",
+"Squeeze your glutes and brace your abs so your hips stay square to the floor.",
+"Lift one hand and tap the opposite shoulder, then place it back down.",
+"Alternate sides. Each tap is one rep — if your hips rock, widen your feet or slow down."
+],
+"underhand-row": [
+"Lie under a sturdy table or a bar set at hip height and grip the edge with your palms facing you, hands about shoulder-width apart.",
+"Straighten your body from heels to head and hang with your arms extended.",
+"Pull your chest up to your hands by driving your elbows down past your ribs.",
+"Lower under control. Walk your feet in toward you to make it easier, or straighten them out to make it harder."
+],
+"towel-curl": [
+"Stand on one end of a towel and hold the other end in one hand, arm hanging at your side.",
+"Curl the towel up toward your shoulder while pressing down through your foot to resist.",
+"Fight the resistance on the way back down — the lowering half is where most of the work is.",
+"Press down hard enough that the last two reps are a real grind, then switch sides."
+],
+"bw-sl-rdl": [
+"Stand on one leg with a soft bend in the knee, hands out in front of you for balance.",
+"Hinge forward at the hip, letting the free leg float straight back behind you.",
+"Lower until your torso and back leg form one line roughly parallel to the floor, keeping your back flat.",
+"Squeeze the standing glute to stand tall again. Wobbling is normal — go slower rather than shorter."
+],
+"jumping-jack": [
+"Stand tall with your feet together and arms at your sides.",
+"Jump your feet out wide while sweeping your arms all the way overhead.",
+"Jump back to the start in one smooth motion.",
+"Keep a steady rhythm for the target time, landing softly on the balls of your feet."
+],
+"high-knees": [
+"Stand tall with your feet hip-width apart.",
+"Run on the spot, driving one knee at a time up past hip height.",
+"Pump your arms in time with your legs and land on the balls of your feet.",
+"Stay upright — leaning back turns it into a much easier exercise."
+],
+"burpee": [
+"From standing, squat down and place your hands on the floor in front of your feet.",
+"Jump or step your feet back into a push-up position and lower your chest to the floor.",
+"Press back up and jump or step your feet back in toward your hands.",
+"Stand and jump straight up with your arms overhead, then go straight into the next rep. Skip the push-up or the jump to make it easier."
+],
 "db-bench": [
 "Lie down on a flat bench with a dumbbell in each hand resting on top of your thighs. The palms of your hands will be facing each other.",
 "Then, using your thighs to help raise the dumbbells up, lift the dumbbells one at a time so that you can hold them in front of you at shoulder width.",
@@ -406,5 +454,126 @@ const INSTRUCTIONS = {
 "jump-rope": [
 "Hold an end of the rope in each hand. Position the rope behind you on the ground. Raise your arms up and turn the rope over your head bringing it down in front of you. When it reaches the ground, jump over it. Find a good turning pace that can be maintained. Different speeds and techniques can be used to introduce variation.",
 "Rope jumping is exciting, challenges your coordination, and requires a lot of energy. A 150 lb person will burn about 350 calories jumping rope for 30 minutes, compared to over 450 calories running."
+],
+"incline-pushup": [
+"Stand facing bench or sturdy elevated platform. Place hands on edge of bench or platform, slightly wider than shoulder width.",
+"Position forefoot back from bench or platform with arms and body straight. Arms should be perpendicular to body. Keeping body straight, lower chest to edge of box or platform by bending arms.",
+"Push body up until arms are extended. Repeat."
+],
+"decline-pushup": [
+"Lie on the floor face down and place your hands about 36 inches apart while holding your torso up at arms length. Move your feet up to a box or bench. This will be your starting position.",
+"Next, lower yourself downward until your chest almost touches the floor as you inhale.",
+"Now breathe out and press your upper body back up to the starting position while squeezing your chest.",
+"After a brief pause at the top contracted position, you can begin to lower yourself downward again for as many repetitions as needed."
+],
+"inverted-row": [
+"Position a bar in a rack to about waist height. You can also use a smith machine.",
+"Take a wider than shoulder width grip on the bar and position yourself hanging underneath the bar. Your body should be straight with your heels on the ground with your arms fully extended. This will be your starting position.",
+"Begin by flexing the elbow, pulling your chest towards the bar. Retract your shoulder blades as you perform the movement.",
+"Pause at the top of the motion, and return yourself to the start position.",
+"Repeat for the desired number of repetitions."
+],
+"superman": [
+"To begin, lie straight and face down on the floor or exercise mat. Your arms should be fully extended in front of you. This is the starting position.",
+"Simultaneously raise your arms, legs, and chest off of the floor and hold this contraction for 2 seconds. Tip: Squeeze your lower back to get the best results from this exercise. Remember to exhale during this movement. Note: When holding the contracted position, you should look like superman when he is flying.",
+"Slowly begin to lower your arms, legs and chest back down to the starting position while inhaling.",
+"Repeat for the recommended amount of repetitions prescribed in your program."
+],
+"bw-hyperext": [
+"With someone holding down your legs, slide yourself down to the edge a flat bench until your hips hang off the end of the bench. Tip: Your entire upper body should be hanging down towards the floor. Also, you will be in the same position as if you were on a hyperextension bench but the range of motion will be shorter due to the height of the flat bench vs. that of the hyperextension bench.",
+"With your body straight, cross your arms in front of you (my preference) or behind your head. This will be your starting position. Tip: You can also hold a weight plate for extra resistance in front of you under your crossed arms.",
+"Start bending forward slowly at the waist as far as you can while keeping your back flat. Inhale as you perform this movement. Keep moving forward until you almost touch the floor or you feel a nice stretch on the hamstrings (whichever comes first). Tip: Never round the back as you perform this exercise.",
+"Slowly raise your torso back to the initial position as you exhale. Tip: Avoid the temptation to arch your back past a straight line. Also, do not swing the torso at any time in order to protect the back from injury.",
+"Repeat for the recommended amount of repetitions."
+],
+"diamond-pushup": [
+"Lie on the floor face down and place your hands closer than shoulder width for a close hand position. Make sure that you are holding your torso up at arms' length.",
+"Lower yourself until your chest almost touches the floor as you inhale.",
+"Using your triceps and some of your pectoral muscles, press your upper body back up to the starting position and squeeze your chest. Breathe out as you perform this step.",
+"After a second pause at the contracted position, repeat the movement for the prescribed amount of repetitions."
+],
+"towel-tricep-ext": [
+"To begin, stand up with both arms fully extended above the head holding one end of a towel with both hands. Your elbows should be in and the arms perpendicular to the floor with the palms facing each other while your feet should be shoulder width apart from each other. This is the starting position.",
+"Now communicate with your partner so that he/she can grip the other side of the towel to apply resistance. Keeping your upper arms close to your head (elbows in) and perpendicular to the floor, lower the resistance in a semicircular motion behind your head until your forearms touch your biceps. Tip: The upper arms should remain stationary and only the forearms should move. Breathe in as you perform this step.",
+"Go back to the starting position by using the triceps to raise the towel. Breathe out as you perform this step.",
+"Repeat for the recommended amount of repetitions."
+],
+"bw-squat": [
+"Stand with your feet shoulder width apart. You can place your hands behind your head. This will be your starting position.",
+"Begin the movement by flexing your knees and hips, sitting back with your hips.",
+"Continue down to full depth if you are able,and quickly reverse the motion until you return to the starting position. As you squat, keep your head and chest up and push your knees out."
+],
+"walking-lunge": [
+"Begin standing with your feet shoulder width apart and your hands on your hips.",
+"Step forward with one leg, flexing the knees to drop your hips. Descend until your rear knee nearly touches the ground. Your posture should remain upright, and your front knee should stay above the front foot.",
+"Drive through the heel of your lead foot and extend both knees to raise yourself back up.",
+"Step forward with your rear foot, repeating the lunge on the opposite leg."
+],
+"bw-split-squat": [
+"Being in a standing position. Jump into a split leg position, with one leg forward and one leg back, flexing the knees and lowering your hips slightly as you do so.",
+"As you descend, immediately reverse direction, standing back up and jumping, reversing the position of your legs. Repeat 5-10 times on each leg."
+],
+"jump-squat": [
+"Cross your arms over your chest.",
+"With your head up and your back straight, position your feet at shoulder width.",
+"Keeping your back straight and chest up, squat down as you inhale until your upper thighs are parallel, or lower, to the floor.",
+"Now pressing mainly with the ball of your feet, jump straight up in the air as high as possible, using the thighs like springs. Exhale during this portion of the movement.",
+"When you touch the floor again, immediately squat down and jump again.",
+"Repeat for the recommended amount of repetitions."
+],
+"floor-gh-raise": [
+"You can use a partner for this exercise or brace your feet under something stable.",
+"Begin on your knees with your upper legs and torso upright. If using a partner, they will firmly hold your feet to keep you in position. This will be your starting position.",
+"Lower yourself by extending at the knee, taking care to NOT flex the hips as you go forward.",
+"Place your hands in front of you as you reach the floor. This movement is very difficult and you may be unable to do it unaided. Use your arms to lightly push off the floor to aid your return to the starting position."
+],
+"nordic-curl": [
+"Using the leg pad of a lat pulldown machine or a preacher bench, position yourself so that your ankles are under the pads, knees on the seat, and you are facing away from the machine. You should be upright and maintaining good posture.",
+"This will be your starting position. Lower yourself under control until your knees are almost completely straight.",
+"Remaining in control, raise yourself back up to the starting position.",
+"If you are unable to complete a rep, use a band, a partner, or push off of a box to aid in completing a repetition."
+],
+"sl-glute-bridge": [
+"Lay on the floor with your feet flat and knees bent.",
+"Raise one leg off of the ground, pulling the knee to your chest. This will be your starting position.",
+"Execute the movement by driving through the heel, extending your hip upward and raising your glutes off of the ground.",
+"Extend as far as possible, pause and then return to the starting position."
+],
+"donkey-kick": [
+"Kneel on the floor or an exercise mat and bend at the waist with your arms extended in front of you (perpendicular to the torso) in order to get into a kneeling push-up position but with the arms spaced at shoulder width. Your head should be looking forward and the bend of the knees should create a 90-degree angle between the hamstrings and the calves. This will be your starting position.",
+"As you exhale, lift up your right leg until the hamstrings are in line with the back while maintaining the 90-degree angle bend. Contract the glutes throughout this movement and hold the contraction at the top for a second. Tip: At the end of the movement the upper leg should be parallel to the floor while the calf should be perpendicular to it.",
+"Go back to the initial position as you inhale and now repeat with the left leg.",
+"Continue to alternate legs until all of the recommended repetitions have been performed."
+],
+"bw-step-up": [
+"Stand facing a box or bench of an appropriate height with your feet together. This will be your starting position.",
+"Begin the movement by stepping up, putting your left foot on the top of the bench. Extend through the hip and knee of your front leg to stand up on the box. As you stand on the box with your left leg, flex your right knee and hip, bringing your knee as high as you can.",
+"Reverse this motion to step down off the box, and then repeat the sequence on the opposite leg."
+],
+"bw-calf-raise": [
+"Adjust the padded lever of the calf raise machine to fit your height.",
+"Place your shoulders under the pads provided and position your toes facing forward (or using any of the two other positions described at the beginning of the chapter). The balls of your feet should be secured on top of the calf block with the heels extending off it. Push the lever up by extending your hips and knees until your torso is standing erect. The knees should be kept with a slight bend; never locked. Toes should be facing forward, outwards or inwards as described at the beginning of the chapter. This will be your starting position.",
+"Raise your heels as you breathe out by extending your ankles as high as possible and flexing your calf. Ensure that the knee is kept stationary at all times. There should be no bending at any time. Hold the contracted position by a second before you start to go back down.",
+"Go back slowly to the starting position as you breathe in by lowering your heels as you bend the ankles until calves are stretched.",
+"Repeat for the recommended amount of repetitions."
+],
+"reverse-crunch": [
+"Lie down on the floor with your legs fully extended and arms to the side of your torso with the palms on the floor. Your arms should be stationary for the entire exercise.",
+"Move your legs up so that your thighs are perpendicular to the floor and feet are together and parallel to the floor. This is the starting position.",
+"While inhaling, move your legs towards the torso as you roll your pelvis backwards and you raise your hips off the floor. At the end of this movement your knees will be touching your chest.",
+"Hold the contraction for a second and move your legs back to the starting position while exhaling.",
+"Repeat for the recommended amount of repetitions."
+],
+"bicycle-crunch": [
+"Lie flat on the floor with your lower back pressed to the ground. For this exercise, you will need to put your hands beside your head. Be careful however to not strain with the neck as you perform it. Now lift your shoulders into the crunch position.",
+"Bring knees up to where they are perpendicular to the floor, with your lower legs parallel to the floor. This will be your starting position.",
+"Now simultaneously, slowly go through a cycle pedal motion kicking forward with the right leg and bringing in the knee of the left leg. Bring your right elbow close to your left knee by crunching to the side, as you breathe out.",
+"Go back to the initial position as you breathe in.",
+"Crunch to the opposite side as you cycle your legs and bring closer your left elbow to your right knee and exhale.",
+"Continue alternating in this manner until all of the recommended repetitions for each side have been completed."
+],
+"mountain-climber": [
+"Begin in a pushup position, with your weight supported by your hands and toes. Flexing the knee and hip, bring one leg until the knee is approximately under the hip. This will be your starting position.",
+"Explosively reverse the positions of your legs, extending the bent leg until the leg is straight and supported by the toe, and bringing the other foot up with the hip and knee flexed. Repeat in an alternating fashion for 20-30 seconds."
 ]
 };

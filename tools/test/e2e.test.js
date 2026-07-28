@@ -123,6 +123,26 @@ const ok = (cond, msg) => { console.log((cond ? 'ok: ' : 'FAIL: ') + msg); if (!
   await page.waitForSelector('[data-a="generate"]');
   ok(await page.locator('.resume').count() === 0, 'discard clears the session');
 
+  // --- at home: one tap, no equipment, from whatever is selected ---
+  await page.click('[data-a="home-build"]');
+  await page.waitForSelector('.ex-row');
+  const homeTxt = await page.textContent('.screen');
+  ok(/At home · no equipment/.test(homeTxt), 'at-home preview says no equipment');
+  ok(!/Dumbbells|Cable|Barbell|Smith machine|Kettlebell/.test(
+    await page.locator('.ex-row .muted').first().textContent() +
+    await page.locator('.ex-row .muted').last().textContent()), 'at-home plan is bodyweight only');
+  await page.click('[data-a="regen"]');
+  await page.waitForSelector('.ex-row');
+  ok(/At home · no equipment/.test(await page.textContent('.screen')), 'reshuffling a home plan stays at home');
+  ok(!/Dumbbells|Cable|Barbell|Smith machine|Kettlebell|Rack/.test(
+    await page.locator('.card.list').textContent()), 'the reshuffled home plan is still bodyweight only');
+  await page.click('[data-a="start"]');
+  await page.waitForSelector('.workout-screen');
+  ok(await page.locator('.home-badge').count() === 1, 'the session screen carries the at-home badge');
+  page.once('dialog', d => d.accept());
+  await page.click('[data-a="discard"]');
+  await page.waitForSelector('[data-a="generate"]');
+
   await browser.close();
   console.log(process.exitCode ? '--- E2E FAILURES ---' : '--- E2E ALL PASSED ---');
 })().catch(e => { console.error('FATAL', e); process.exit(1); });

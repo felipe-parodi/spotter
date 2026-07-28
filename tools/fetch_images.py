@@ -83,7 +83,30 @@ MAPPING = {
     'elliptical-steady': 'Elliptical Trainer',
     'stair-climber': 'Step Mill',
     'jump-rope': 'Rope Jumping',
-    # no clean public-domain match: wall-sit, hollow-hold, bird-dog
+    # at-home / bodyweight
+    'incline-pushup': 'Incline Push-Up',
+    'decline-pushup': 'Decline Push-Up',
+    'inverted-row': 'Inverted Row',
+    'superman': 'Superman',
+    'bw-hyperext': 'Hyperextensions With No Hyperextension Bench',
+    'diamond-pushup': 'Push-Ups - Close Triceps Position',
+    'towel-tricep-ext': 'Standing Towel Triceps Extension',
+    'bw-squat': 'Bodyweight Squat',
+    'walking-lunge': 'Bodyweight Walking Lunge',
+    'bw-split-squat': 'Split Squats',
+    'jump-squat': 'Freehand Jump Squat',
+    'floor-gh-raise': 'Floor Glute-Ham Raise',
+    'nordic-curl': 'Natural Glute Ham Raise',
+    'sl-glute-bridge': 'Single Leg Glute Bridge',
+    'donkey-kick': 'Glute Kickback',
+    'bw-step-up': 'Step-up with Knee Raise',
+    'bw-calf-raise': 'Standing Calf Raises',
+    'reverse-crunch': 'Reverse Crunch',
+    'bicycle-crunch': 'Air Bike',
+    'mountain-climber': 'Mountain Climbers',
+    # no clean public-domain match: wall-sit, hollow-hold, bird-dog,
+    # pike-pushup, shoulder-tap, underhand-row, towel-curl, bw-sl-rdl,
+    # jumping-jack, high-knees, burpee
 }
 
 # our exercise id -> a close variant in free-exercise-db whose photos give a
@@ -150,6 +173,54 @@ EXTRA_INSTRUCTIONS = {
         'Extend your right arm forward and left leg back until both are level with your torso.',
         'Pause for a second without letting your hips rotate or your back arch.',
         'Return to the start and repeat with the opposite arm and leg. That is one rep per side.',
+    ],
+    'pike-pushup': [
+        'Start in a push-up position, then walk your feet in and push your hips up so your body makes an upside-down V.',
+        'Keep your legs as straight as your hamstrings allow and your head between your arms.',
+        'Bend your elbows and lower the crown of your head toward the floor just in front of your hands.',
+        'Press back up until your arms are straight. Elevate your feet on a step to make it harder.',
+    ],
+    'shoulder-tap': [
+        'Set up in a high plank with hands under your shoulders and feet wider than usual for stability.',
+        'Squeeze your glutes and brace your abs so your hips stay square to the floor.',
+        'Lift one hand and tap the opposite shoulder, then place it back down.',
+        'Alternate sides. Each tap is one rep — if your hips rock, widen your feet or slow down.',
+    ],
+    'underhand-row': [
+        'Lie under a sturdy table or a bar set at hip height and grip the edge with your palms facing you, hands about shoulder-width apart.',
+        'Straighten your body from heels to head and hang with your arms extended.',
+        'Pull your chest up to your hands by driving your elbows down past your ribs.',
+        'Lower under control. Walk your feet in toward you to make it easier, or straighten them out to make it harder.',
+    ],
+    'towel-curl': [
+        'Stand on one end of a towel and hold the other end in one hand, arm hanging at your side.',
+        'Curl the towel up toward your shoulder while pressing down through your foot to resist.',
+        'Fight the resistance on the way back down — the lowering half is where most of the work is.',
+        'Press down hard enough that the last two reps are a real grind, then switch sides.',
+    ],
+    'bw-sl-rdl': [
+        'Stand on one leg with a soft bend in the knee, hands out in front of you for balance.',
+        'Hinge forward at the hip, letting the free leg float straight back behind you.',
+        'Lower until your torso and back leg form one line roughly parallel to the floor, keeping your back flat.',
+        'Squeeze the standing glute to stand tall again. Wobbling is normal — go slower rather than shorter.',
+    ],
+    'jumping-jack': [
+        'Stand tall with your feet together and arms at your sides.',
+        'Jump your feet out wide while sweeping your arms all the way overhead.',
+        'Jump back to the start in one smooth motion.',
+        'Keep a steady rhythm for the target time, landing softly on the balls of your feet.',
+    ],
+    'high-knees': [
+        'Stand tall with your feet hip-width apart.',
+        'Run on the spot, driving one knee at a time up past hip height.',
+        'Pump your arms in time with your legs and land on the balls of your feet.',
+        'Stay upright — leaning back turns it into a much easier exercise.',
+    ],
+    'burpee': [
+        'From standing, squat down and place your hands on the floor in front of your feet.',
+        'Jump or step your feet back into a push-up position and lower your chest to the floor.',
+        'Press back up and jump or step your feet back in toward your hands.',
+        'Stand and jump straight up with your arms overhead, then go straight into the next rep. Skip the push-up or the jump to make it easier.',
     ],
 }
 

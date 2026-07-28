@@ -15,7 +15,14 @@ after install — each phone keeps its own profile and history.
   cardio day breaks up dense weeks, and any day is tap-to-override (with a
   warning, never a block). Today shows the plan with one-tap build, a mini week
   strip, and a "you missed X — swap it in?" catch-up when it's safe.
-- Plans are built from a ~65-exercise database (plus ~40 Rebuild-only movements) — now including **cardio**
+- **At home** — one tap on Today builds the same plan from your current muscle-group
+  picks using nothing but a floor, a wall and a chair. It's a temporary equipment
+  override, not a second profile: same generator, same weight/rep progression,
+  same history, rests trimmed to a minute because bodyweight work doesn't need
+  ninety seconds. Swapping an exercise inside a home plan stays bodyweight, and
+  the session is tagged *at home* in your log.
+- Plans are built from a ~90-exercise database (~40 of them bodyweight-only, plus
+  ~40 Rebuild-only movements) — now including **cardio**
   (treadmill, bike, rower, elliptical, stair climber, jump rope; logged in
   minutes) — filtered by your gym's equipment (toggle what your gym has in
   **Profile → Gym equipment**). Selecting the Cardio chip appends one cardio

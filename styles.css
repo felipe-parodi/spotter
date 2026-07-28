@@ -184,6 +184,7 @@ h2 { font-size: 17px; }
 .btn-primary .db { width: 19px; height: 19px; fill: currentColor; }
 
 .btn-ghost {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
   flex: 1;
   padding: 14px;
   border-radius: var(--r-btn);
@@ -193,6 +194,7 @@ h2 { font-size: 17px; }
   font-weight: 800;
   font-size: 14.5px;
 }
+.btn-ghost .db { width: 17px; height: 17px; fill: currentColor; }
 
 .btn-danger {
   padding: 13px;
@@ -206,6 +208,7 @@ h2 { font-size: 17px; }
 
 .row-btns { display: flex; gap: 10px; }
 .row-btns .btn-primary { flex: 2; }
+.btn-ghost.wide { width: 100%; margin-bottom: 10px; }
 
 .icon-btn {
   width: 36px; height: 36px;
@@ -603,6 +606,20 @@ h2 { font-size: 17px; }
   letter-spacing: 0.08em;
   color: #fff;
   background: var(--accent);
+  border-radius: 3px;
+  padding: 1px 5px;
+  vertical-align: 2px;
+  margin-left: 6px;
+}
+
+.home-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: var(--surface-2, color-mix(in srgb, var(--muted) 14%, transparent));
+  border: 1px solid var(--line);
   border-radius: 3px;
   padding: 1px 5px;
   vertical-align: 2px;

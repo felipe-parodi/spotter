@@ -470,7 +470,20 @@ function logPeriodStart(iso) {
 
 /* ---------------- exercise filtering & progression ---------------- */
 
+/* "At home" is a temporary equipment override, not a second profile: while
+   homeOnly is set, nothing but bodyweight passes equipOK. Set it around any
+   call that picks or re-picks exercises (generate, swap, repeat) so a home
+   plan stays a home plan when you reshuffle mid-session. */
+let homeOnly = false;
+
+function withHome(on, fn) {
+  const prev = homeOnly;
+  homeOnly = !!on;
+  try { return fn(); } finally { homeOnly = prev; }
+}
+
 function equipOK(ex) {
+  if (homeOnly) return ex.eq.every(t => t === 'bodyweight');
   return ex.eq.every(t => t === 'bodyweight' || S.settings.equipment[t]);
 }
 
@@ -568,8 +581,14 @@ function assignParams(ex, minutes) {
     sets = Math.min(sets, 3);
     if (kind === 'time' || kind === 'cardio') rest = Math.round(rest * 0.8);
   }
+  // bodyweight-only work isn't heavy enough to need 1½ min — a minute keeps
+  // a home session dense enough to be worth the time
+  if (homeOnly && kind !== 'cardio') rest = Math.min(rest, 60);
   if (todayReadiness().dropSet && sets > 2) sets -= 1; // gentler day
-  return { sets, reps: p.reps.slice(), rest, kind };
+  // burpees and high knees are finishers, not steady-state — nobody should be
+  // prescribed 20 unbroken minutes of them
+  const reps = (kind === 'cardio' && ex.intense) ? [5, 8] : p.reps.slice();
+  return { sets, reps, rest, kind };
 }
 
 function estMinutes(a) {
@@ -605,6 +624,9 @@ function pickExercise(muscle, usedIds, recent, preferCompound) {
     if (S.profile.level === 'beginner' && e.lvl === 2) score -= 4;
     if (S.profile.level === 'experienced' && e.lvl === 1) score -= 1;
     if (avoidStrain && HIGH_STRAIN.has(e.id)) score -= 15; // gentler day: steer away from heaviest lifts
+    // at the gym a machine beats jumping around the floor; if there's no
+    // machine in the pool the penalty applies to everyone and cancels out
+    if (!homeOnly && e.cardio && e.eq.every(t => t === 'bodyweight')) score -= 8;
     if (score > bestScore) { bestScore = score; best = e; }
   }
   return best;
@@ -655,6 +677,7 @@ function generateWorkout(groupIds, minutes) {
   return {
     groups: groupIds,
     minutes,
+    home: homeOnly || undefined,
     est: Math.round(total + 5),
     ex: picked.map(p => snapshot(p, p)),
   };
@@ -668,9 +691,12 @@ function swapExercise(i) {
   if (!orig) return;
   const muscle = orig.m[0];
   const usedIds = new Set(plan.ex.map(e => e.id));
-  const next = pickExercise(muscle, usedIds, new Set(), cur.cmp);
-  if (!next) { toast('No alternative for this muscle with your equipment.'); return; }
-  const fresh = snapshot(next, assignParams(next, plan.minutes || 45));
+  const next = withHome(plan.home, () => pickExercise(muscle, usedIds, new Set(), cur.cmp));
+  if (!next) {
+    toast(plan.home ? 'No other bodyweight option for that muscle.' : 'No alternative for this muscle with your equipment.');
+    return;
+  }
+  const fresh = withHome(plan.home, () => snapshot(next, assignParams(next, plan.minutes || 45)));
   if (plan === S.active) {
     fresh.log = Array.from({ length: fresh.sets }, () => ({ w: null, r: null, done: false }));
     fresh.suggest = suggestFor(fresh);
@@ -679,12 +705,12 @@ function swapExercise(i) {
   save(); render();
 }
 
-function warmupFor(groupIds) {
+function warmupFor(groupIds, home) {
   const lower = groupIds.some(g => ['legs', 'glutes', 'full'].includes(g));
   const upper = groupIds.some(g => ['chest', 'back', 'shoulders', 'arms', 'full'].includes(g));
-  const bits = ['2–3 min easy cardio'];
+  const bits = [home ? '2–3 min jogging on the spot or up and down the stairs' : '2–3 min easy cardio'];
   if (lower) bits.push('leg swings + 10 bodyweight squats');
-  if (upper) bits.push('arm circles + a light first set of exercise 1');
+  if (upper) bits.push(home ? 'arm circles + 5 easy push-ups' : 'arm circles + a light first set of exercise 1');
   return bits.join(' · ');
 }
 
@@ -696,6 +722,7 @@ function repeatSession(i) {
   const w = S.history[i];
   if (!w) return;
   const ex = [];
+  homeOnly = !!w.home; // repeat of a home session keeps its shorter rests
   for (const e of (w.exercises || [])) {
     if (e.hiit) continue;
     const def = findEx(e.id);
@@ -710,8 +737,9 @@ function repeatSession(i) {
     entry.sets = Math.max(1, e.sets.length);
     ex.push(entry);
   }
+  homeOnly = false;
   if (!ex.length) { toast('Nothing repeatable in that session.'); return; }
-  S.draft = { groups: w.groups, minutes: S.sel.minutes || 45, est: w.minutes, ex, repeatOf: w.date };
+  S.draft = { groups: w.groups, minutes: S.sel.minutes || 45, est: w.minutes, ex, repeatOf: w.date, home: w.home || undefined };
   save(); go('preview');
 }
 
@@ -1253,6 +1281,7 @@ function finishWorkout(force) {
   const entry = {
     date: todayISO(),
     groups: a.groups,
+    home: a.home || undefined,
     goal: S.profile.goal,
     minutes: minutesBetween(a.startedAt, Date.now()),
     exercises: a.ex.map(e => ({
@@ -1857,6 +1886,7 @@ function viewToday() {
         ${dumbbellSVG()} Build workout
       </button>
     </section>
+    <button class="btn-ghost wide" data-a="home-build">${houseSVG()} At home — no equipment</button>
     <div class="row-btns">
       <button class="btn-ghost" data-a="freestyle">Blank session</button>
       <button class="btn-ghost" data-a="hiit-menu">Guided HIIT</button>
@@ -2016,14 +2046,14 @@ function viewPreview() {
     <header class="top">
       <button class="back" data-a="nav" data-r="today">‹</button>
       <div><h1>${track ? esc(trackLabel(track)) : esc(groupLabels(d.groups))}</h1>
-      <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : goal.label} · about ${d.est} min · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
+      <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : d.home ? 'At home · no equipment' : goal.label} · about ${d.est} min · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
     </header>
     ${d.repeatOf ? '<div class="hint">Repeat of ' + esc(fmtDate(d.repeatOf)) + ' — same exercises and sets, weights refreshed from your latest numbers.</div>' : ''}
     ${d.advanced ? '<div class="card rb-good"><strong>Phase ' + d.advanced + ' — ' + esc(PHASE_META[d.advanced - 1].name) + '</strong><span class="muted">' + esc(PHASE_META[d.advanced - 1].blurb) + '</span></div>' : ''}
     ${d.verdict && d.verdict.note ? '<div class="rb-verdict ' + esc(d.verdict.kind) + '">' + esc(d.verdict.note) + '</div>' : ''}
     ${track
       ? '<div class="card warm"><strong>Before you start</strong><span class="muted">A few easy minutes to get warm — a walk, a bike, or the first set taken very light. Up to 5 out of 10 during is fine. What matters is how it feels tomorrow morning.</span></div>'
-      : d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups)) + '</span></div>'}
+      : d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups, d.home)) + '</span></div>'}
     <div class="card list">${rows}</div>
     <div class="row-btns">
       ${track ? '<button class="btn-ghost" data-a="nav" data-r="rehab">Back</button>' : '<button class="btn-ghost" data-a="regen">Reshuffle</button>'}
@@ -2060,13 +2090,13 @@ function viewWorkout() {
   <div class="screen workout-screen">
     <header class="top sticky">
       <button class="back" data-a="quit">‹</button>
-      <div class="grow"><h1>${esc(groupLabels(a.groups))}</h1>
+      <div class="grow"><h1>${esc(groupLabels(a.groups))}${a.home ? '<span class="home-badge">at home</span>' : ''}</h1>
         <p class="muted small"><span id="elapsed">${minutesBetween(a.startedAt, Date.now())} min</span> · ${doneSets}/${totalSets} sets</p></div>
       <div class="ring" id="ring" style="--p:${totalSets ? doneSets / totalSets : 0}"><span id="ring-txt">${Math.round(100 * doneSets / Math.max(1, totalSets))}%</span></div>
     </header>
     <div class="progress"><div class="progress-fill" id="pbar" style="width:${100 * doneSets / Math.max(1, totalSets)}%"></div></div>
     ${a.rehab ? '<div class="card warm rb"><strong>Rebuild · week ' + trackWeek(trackById(a.rehab) || { startedAt: todayISO() }) + '</strong><span class="muted">Up to 5 out of 10 during is fine. Stop a set if it sharpens past that — the morning check is what counts.</span></div>'
-      : freestyle && !a.ex.length ? '' : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups)) + '</span></div>'}
+      : freestyle && !a.ex.length ? '' : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups, a.home)) + '</span></div>'}
     ${cards}
     ${a.rehab ? '' : '<button class="add-ex" data-a="open-picker">＋ Add exercise</button>'}
     ${a.ex.length ? '<button class="btn-primary big" data-a="finish">Finish session</button>' : ''}
@@ -3058,7 +3088,7 @@ function viewHistory() {
     return `
     <div class="card hist${open ? ' open' : ''}"${editing ? '' : ' data-a="hist-toggle" data-i="' + i + '"'}>
       <div class="hist-row"${editing ? ' data-a="hist-toggle" data-i="' + i + '"' : ''}>
-        <div><strong>${esc(groupLabels(w.groups))}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
+        <div><strong>${esc(groupLabels(w.groups))}${w.home ? '<span class="home-badge">at home</span>' : ''}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
         <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${sessionKcal(w) ? ' · ' + kcalTxt(w) : ''}</span></div>
         <span class="chev">${open ? '⌄' : '›'}</span>
       </div>
@@ -3463,6 +3493,10 @@ function dumbbellSVG() {
   return '<svg class="db" viewBox="0 0 24 24"><path d="M1.5 10h2v4h-2zM20.5 10h2v4h-2zM4.5 8h2.5v8H4.5zM17 8h2.5v8H17zM7.5 11h9v2h-9z"/></svg>';
 }
 
+function houseSVG() {
+  return '<svg class="db" viewBox="0 0 24 24"><path d="M12 3 2.5 11.2l1.3 1.5L5 11.6V21h5v-6h4v6h5v-9.4l1.2 1.1 1.3-1.5zm5 6.9V19h-1v-6H8v6H7V9.9l5-4.3z"/></svg>';
+}
+
 /* ---------------- events ---------------- */
 
 document.addEventListener('click', ev => {
@@ -3520,9 +3554,23 @@ document.addEventListener('click', ev => {
   }
 
   else if (a === 'generate' || a === 'regen') {
+    const home = a === 'regen' && S.draft && S.draft.home;
     if (!S.sel.groups.length) return;
-    S.draft = generateWorkout(S.sel.groups, S.sel.minutes);
-    if (!S.draft.ex.length) { toast('Nothing matches — check equipment settings in Profile.'); return; }
+    S.draft = withHome(home, () => generateWorkout(S.sel.groups, S.sel.minutes));
+    if (!S.draft.ex.length) {
+      toast(home ? 'Nothing bodyweight-only matches those groups.' : 'Nothing matches — check equipment settings in Profile.');
+      return;
+    }
+    save(); go('preview');
+  }
+
+  /* No kit, no gym — same generator, bodyweight only. Falls back to full
+     body so the button always does something. */
+  else if (a === 'home-build') {
+    if (!S.sel.groups.length) S.sel.groups = ['full']; // so Reshuffle has something to work from
+    const plan = withHome(true, () => generateWorkout(S.sel.groups, S.sel.minutes));
+    if (!plan.ex.length) { toast('Nothing bodyweight-only matches those groups.'); return; }
+    S.draft = plan;
     save(); go('preview');
   }
 

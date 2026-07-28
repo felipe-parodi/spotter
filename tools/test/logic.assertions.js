@@ -753,4 +753,77 @@ function rbTrack(pattern, region) {
   S.rehab = { tracks: [], niggles: [], dismissed: null };
 }
 
+// --- at-home mode: bodyweight only, and it sticks ---
+{
+  const savedEquip = S.settings.equipment;
+  const savedSel = S.sel;
+  const savedLevel = S.profile.level;
+  S.sel = { groups: [], minutes: 45 };
+  S.settings.equipment = Object.fromEntries(EQUIPMENT.map(e => [e.id, true]));
+
+  // every muscle group has to be fillable with nothing but a floor
+  for (const g of UI_GROUPS) {
+    const p = withHome(true, () => generateWorkout([g.id], 45));
+    assert(p.ex.length >= 1, 'at home: ' + g.id + ' finds bodyweight exercises (' + p.ex.length + ')');
+    assert(p.ex.every(e => e.eqLabel === 'Bodyweight'), 'at home: ' + g.id + ' is bodyweight only');
+  }
+
+  // beginners too — the technical bodyweight moves must not be the only ones
+  S.profile.level = 'beginner';
+  for (const g of UI_GROUPS) {
+    const p = withHome(true, () => generateWorkout([g.id], 45));
+    assert(p.ex.length >= 1, 'at home (beginner): ' + g.id + ' still fills');
+  }
+  S.profile.level = savedLevel;
+
+  // finishers get a finisher's duration, not a steady-state one
+  const burpee = EXERCISES.find(e => e.id === 'burpee');
+  assert(assignParams(burpee, 45).reps[1] <= 8, 'burpees are capped at a finisher length');
+  assert(assignParams(EXERCISES.find(e => e.id === 'bike-steady'), 45).reps[1] > 8, 'steady cardio keeps its full block');
+
+  // a gym with machines shouldn't keep prescribing jumping jacks
+  let machineFinisher = 0;
+  for (let i = 0; i < 40; i++) {
+    const p = generateWorkout(['cardio'], 30);
+    if (p.ex.length && p.ex[0].eqLabel !== 'Bodyweight') machineFinisher++;
+  }
+  assert(machineFinisher >= 30, 'gym cardio still favours the machines (' + machineFinisher + '/40)');
+
+  const home = withHome(true, () => generateWorkout(['full'], 45));
+  assert(home.home === true, 'a home plan is flagged');
+  assert(home.ex.every(e => e.rest <= 60), 'home rests are shortened to a minute');
+  assert(!homeOnly, 'withHome restores the flag afterwards');
+
+  // gym mode is unaffected
+  const gym = generateWorkout(['full'], 45);
+  assert(gym.home === undefined, 'a gym plan is not flagged');
+  assert(gym.ex.some(e => e.eqLabel !== 'Bodyweight'), 'gym plans still use equipment');
+
+  // swapping inside a home plan stays home, and the preview says so
+  S.draft = home;
+  const before = S.draft.ex[0].id;
+  swapExercise(0);
+  assert(S.draft.ex[0].id !== before || home.ex.length === 1, 'home swap picks something else');
+  assert(S.draft.ex.every(e => e.eqLabel === 'Bodyweight'), 'a swap inside a home plan stays bodyweight');
+  assert(viewPreview().indexOf('At home') >= 0, 'the preview says it is an at-home session');
+
+  // and the flag survives the session into history
+  startWorkout();
+  assert(S.active.home === true, 'the active session knows it is at home');
+  assert(viewWorkout().indexOf('at home') >= 0, 'the session screen shows the at-home badge');
+  S.active.ex.forEach(e => e.log.forEach(s => { s.done = true; s.r = e.reps[1]; }));
+  S.active.startedAt = Date.now() - 30 * 60000;
+  finishWorkout(true);
+  assert(S.history[0].home === true, 'the history entry is tagged at home');
+  assert(viewHistory().indexOf('home-badge') >= 0, 'the log shows the at-home badge');
+
+  // repeating it keeps the shorter rests rather than reverting to gym timing
+  repeatSession(0);
+  assert(S.draft.home === true, 'repeating a home session stays a home session');
+  assert(!homeOnly, 'repeatSession leaves the flag clean');
+
+  S.draft = null; S.active = null; S.history.shift();
+  S.settings.equipment = savedEquip; S.sel = savedSel;
+}
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');
