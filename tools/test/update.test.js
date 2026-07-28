@@ -15,6 +15,8 @@ const path = require('path');
 const SW = path.join(__dirname, '..', '..', 'sw.js');
 const orig = fs.readFileSync(SW, 'utf8');
 const ver = orig.match(/const VERSION = '(v[^']+)';/)[1];
+// derived, not hardcoded — SHELL_ASSETS grows as the app gains files
+const nShell = orig.match(/const SHELL_ASSETS = \[([\s\S]*?)\];/)[1].match(/'\.\/?[^']*'/g).length;
 const restore = () => fs.writeFileSync(SW, orig);
 
 const ok = (cond, msg) => { console.log((cond ? 'ok: ' : 'FAIL: ') + msg); if (!cond) process.exitCode = 1; };
@@ -52,7 +54,7 @@ const ok = (cond, msg) => { console.log((cond ? 'ok: ' : 'FAIL: ') + msg); if (!
     return out;
   });
   ok(dump['spotter-img-v1'] >= nImgs, 'image cache survived the update (' + dump['spotter-img-v1'] + ')');
-  ok(dump['spotter-shell-' + ver + '-test'] === 11, 'new shell cache populated');
+  ok(dump['spotter-shell-' + ver + '-test'] === nShell, 'new shell cache populated (' + dump['spotter-shell-' + ver + '-test'] + '/' + nShell + ')');
   ok(!dump['spotter-shell-' + ver], 'old shell cache removed');
   ok(reqs.filter(p => p.includes('/img/')).length === 0, 'no photo re-downloads during update');
 

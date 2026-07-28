@@ -41,7 +41,7 @@ storage['spotter-v1'] = JSON.stringify({
   bodyLog: [{ date: new Date(Date.now() - 10 * 864e5).toISOString(), w: 150 }],
 });
 
-const code = ['exercise-info.js', 'db.js', 'app.js']
+const code = ['exercise-info.js', 'db.js', 'rehab.js', 'app.js']
   .map(f => fs.readFileSync(ROOT + f, 'utf8').replace(/^'use strict';/m, ''))
   .join('\n');
 const tests = fs.readFileSync(path.join(__dirname, 'logic.assertions.js'), 'utf8');

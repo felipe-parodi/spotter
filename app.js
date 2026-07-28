@@ -26,6 +26,9 @@ function defaultState() {
     schedule: { enabled: false, minutes: 45, cardioDay: false, variant: 0, days: {} },
     // optional cycle-aware mode (female profiles) — see cycle notes in README
     cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], checkins: [] },
+    // Rebuild (rehab mode) — see REHAB-SPEC.md. tracks[] holds one 12-week
+    // block per area; niggles[] is the lightweight "this bugged me" log.
+    rehab: { tracks: [], niggles: [], dismissed: null },
   };
 }
 
@@ -50,6 +53,9 @@ function loadState() {
       s.notes = parsed.notes || {};
       s.schedule = Object.assign(defaultState().schedule, parsed.schedule || {});
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
+      s.rehab = Object.assign(defaultState().rehab, parsed.rehab || {});
+      s.rehab.tracks = s.rehab.tracks || [];
+      s.rehab.niggles = s.rehab.niggles || [];
       s.bodyLog = parsed.bodyLog || [];
       delete s.lastSummary; // older versions persisted a copy of history[0]
       // seed the log from an existing single bodyweight so the trend has a start point
@@ -582,8 +588,11 @@ function musclesFor(groupIds) {
 }
 
 function pickExercise(muscle, usedIds, recent, preferCompound) {
+  // rehab-only exercises stay out of normal plans until a track graduates them
+  const grad = graduatedIdSet();
   const pool = EXERCISES.filter(e =>
-    e.m.includes(muscle) && !usedIds.has(e.id) && equipOK(e) && levelOK(e));
+    e.m.includes(muscle) && !usedIds.has(e.id) && equipOK(e) && levelOK(e) &&
+    (!e.rehab || grad.has(e.id)));
   if (!pool.length) return null;
   const avoidStrain = todayReadiness().avoidStrain;
   let best = null, bestScore = -Infinity;
@@ -900,7 +909,7 @@ function startWorkout() {
     startedAt: Date.now(),
     ex: S.draft.ex.map(e => Object.assign({}, e, {
       log: Array.from({ length: e.sets }, () => ({ w: null, r: null, done: false })),
-      suggest: suggestFor(e),
+      suggest: e.rehabEx ? rehabSuggest(e) : suggestFor(e),
     })),
   });
   S.draft = null;
@@ -925,6 +934,246 @@ function restorativePlan() {
     return snapshot(def, params);
   });
   return { groups: ['restorative'], minutes: 20, est: 20, restorative: true, ex };
+}
+
+/* ============================================================
+   Rebuild — rehab mode (state glue; engine lives in rehab.js)
+   ============================================================ */
+
+function rehabInit() {
+  if (!S.rehab) S.rehab = { tracks: [], niggles: [], dismissed: null };
+  if (!S.rehab.tracks) S.rehab.tracks = [];
+  if (!S.rehab.niggles) S.rehab.niggles = [];
+  return S.rehab;
+}
+
+function activeTrack() {
+  return rehabInit().tracks.find(t => t.status === 'active') || null;
+}
+
+function trackById(id) { return rehabInit().tracks.find(t => t.id === id) || null; }
+
+/* Exercise ids that graduated tracks have handed back to normal training. */
+function graduatedIdSet() {
+  const out = new Set();
+  for (const t of rehabInit().tracks) {
+    if (t.status === 'graduated') graduatedIds(t).forEach(id => out.add(id));
+  }
+  return out;
+}
+
+function regionLabel(id) {
+  const r = REHAB_REGIONS.find(x => x.id === id);
+  return r ? r.label : id;
+}
+
+/* Human label for a track: "Left knee", "Lower back". */
+function trackLabel(t) {
+  const reg = regionLabel(t.region);
+  if (!t.side || t.side === 'na') return reg;
+  if (t.side === 'both') return 'Both ' + reg.toLowerCase() + 's';
+  return t.side.charAt(0).toUpperCase() + t.side.slice(1) + ' ' + reg.toLowerCase();
+}
+
+function createTrack(region, side, pattern, answers, baseline, dirBias) {
+  const t = {
+    id: region + '-' + (side || 'na') + '-' + Date.now(),
+    region, side: side || 'na', pattern,
+    startedAt: todayISO(), phaseStartedAt: todayISO(),
+    status: 'active', phase: 1,
+    dose: {}, rung: {}, greenStreak: 0,
+    baseline: baseline || { worst: null, typical: null, psfs: [] },
+    sessions: [], checks: [], psfsLog: [], capacity: [],
+    answers: answers || {}, dirBias: dirBias || null, flags: {},
+  };
+  const pat = REHAB_PATTERNS[pattern];
+  for (const chainId of pat.chains) {
+    t.rung[chainId] = 0;
+    const r = currentRung(t, chainId);
+    if (r < 0) continue;
+    t.rung[chainId] = r;
+    const ex = rehabEx(REHAB_CHAINS[chainId][r]);
+    if (ex) t.dose[ex.id] = baseDose(ex);
+  }
+  return t;
+}
+
+function tempoText(tempo) {
+  if (!tempo) return '';
+  const bits = [];
+  if (tempo.ecc) bits.push(tempo.ecc + 's down');
+  if (tempo.con) bits.push(tempo.con + 's up');
+  return bits.join(' · ');
+}
+
+/* One exercise, frozen into the shape viewWorkout already understands. */
+function rehabSnapshot(def, dose, track, isPrimer) {
+  const sided = def.uni && track.side && track.side !== 'both' && track.side !== 'na';
+  return {
+    id: def.id,
+    name: def.name + (sided ? ' · ' + track.side : ''),
+    cue: def.cue || '', cmp: !!def.cmp, uni: !!def.uni,
+    mode: def.mode || 'reps', cardio: false,
+    eqLabel: (def.eq || []).map(t => EQ_LABEL[t]).join(' · '),
+    sets: dose.sets, reps: [dose.reps, dose.reps],
+    rest: isPrimer ? 120 : (def.mode === 'time' ? 60 : (def.tempo ? 120 : 90)),
+    rehabEx: true, chain: def.chain || null, tempo: def.tempo || null,
+    load: dose.load || 0, primer: !!isPrimer,
+  };
+}
+
+/* Weight/tempo prescription for a rehab exercise — bypasses suggestFor(),
+   which progresses on reps hit rather than on the morning after. */
+function rehabSuggest(e) {
+  const bits = [];
+  if (e.primer) bits.push('About 70% effort — hard, not maximal');
+  if (e.tempo) bits.push(tempoText(e.tempo));
+  const load = e.load > 0 ? e.load : null;
+  return {
+    w: load,
+    setW: load ? Array.from({ length: e.sets }, () => load) : null,
+    note: bits.length ? bits.join(' · ') : null,
+    up: false,
+  };
+}
+
+/* Build today's Rebuild session. Applies the pending verdict from the last
+   session's morning check first, so the doses you see are already adjusted. */
+function buildRehabSession(track) {
+  const pat = patternOf(track);
+  if (!pat) return null;
+  const verdict = pendingVerdict(track);
+  applyVerdict(track, verdict);
+
+  let advanced = null;
+  if (canAdvancePhase(track)) { advancePhase(track); advanced = track.phase; }
+
+  // three reds in the last four means the starting point was too high
+  const alert = rehabAlert(track);
+  if (alert && alert.kind === 'stalling' && track.phase > 1 && !track.flags.droppedAt) {
+    track.phase = Math.max(1, track.phase - 1);
+    track.phaseStartedAt = todayISO();
+    track.flags.droppedAt = todayISO();
+  }
+
+  const ex = [];
+  if (pat.isoPrimer && track.phase <= 2 && track.isoPrimer !== false) {
+    const p = rehabEx(pat.isoPrimer);
+    if (p && rehabExOK(p, track, track.phase)) {
+      ex.push(rehabSnapshot(p, { sets: 5, reps: 45, load: 0 }, track, true));
+    }
+  }
+  for (const chainId of pat.chains) {
+    if (ex.length >= pat.exCount + (ex.some(x => x.primer) ? 1 : 0)) break;
+    const r = currentRung(track, chainId);
+    if (r < 0) continue;
+    const def = rehabEx(REHAB_CHAINS[chainId][r]);
+    if (!def || ex.some(x => x.id === def.id)) continue;
+    if (!track.dose[def.id]) track.dose[def.id] = baseDose(def);
+    ex.push(rehabSnapshot(def, track.dose[def.id], track, false));
+  }
+  if (!ex.length) return null;
+
+  const est = ex.reduce((n, e) => n + e.sets * (0.75 + e.rest / 60), 0);
+  save();
+  return {
+    groups: ['rebuild'], rehab: track.id, minutes: Math.round(est),
+    est: Math.round(est), ex, verdict, advanced,
+  };
+}
+
+/* Record a finished Rebuild session onto its track. */
+function recordRehabSession(entry, active) {
+  const track = trackById(active.rehab);
+  if (!track) return;
+  track.sessions.push({
+    date: entry.date,
+    exIds: entry.exercises.map(e => e.id),
+    duringPain: typeof active.duringPain === 'number' ? active.duringPain : null,
+    phase: track.phase,
+    cls: null, // filled in by the morning check
+  });
+}
+
+/* The morning-after check, if one is owed. Eight hours is enough for a
+   session to have settled or not; after two days the answer is noise. */
+function rehabCheckDue() {
+  const t = activeTrack();
+  if (!t) return null;
+  const sess = lastSession(t);
+  if (!sess || checkForSession(t, sess)) return null;
+  const age = Date.now() - new Date(sess.date).getTime();
+  if (age < 8 * 3600000 || age > 2 * DAY_MS) return null;
+  return { track: t, session: sess };
+}
+
+function recordRehabCheck(track, patch) {
+  track.checks = track.checks || [];
+  const sess = lastSession(track);
+  track.checks.push(Object.assign({ date: todayISO(), for: sess ? sess.date : null }, patch));
+  if (sess && !sess.cls) sess.cls = classifySession(sess, checkForSession(track, sess), track);
+  save();
+}
+
+/* ---- outcome measures ---- */
+
+function psfsDue(track) {
+  const logs = track.psfsLog || [];
+  const last = logs.length ? logs[logs.length - 1].date : track.startedAt;
+  return Date.now() - new Date(last).getTime() >= 14 * DAY_MS;
+}
+
+function capacityDue(track) {
+  const c = track.capacity || [];
+  const pat = patternOf(track);
+  if (!pat || !(pat.capacity || []).length) return false;
+  const last = c.length ? c[c.length - 1].date : track.startedAt;
+  return Date.now() - new Date(last).getTime() >= 28 * DAY_MS;
+}
+
+/* Morning-pain series for the track's trend chart. */
+function rehabPainSeries(track) {
+  return (track.checks || [])
+    .filter(c => typeof c.amPain === 'number')
+    .map(c => ({ date: c.date, val: c.amPain }));
+}
+
+/* PSFS mean now vs at intake; ~2 points is a meaningful change. */
+function psfsDelta(track) {
+  const b = (track.baseline || {}).psfs || [];
+  const logs = track.psfsLog || [];
+  if (!b.length || !logs.length) return null;
+  const base = b.reduce((a, p) => a + p.score, 0) / b.length;
+  const last = logs[logs.length - 1];
+  const now = last.scores.reduce((a, v) => a + v, 0) / last.scores.length;
+  return { base, now, delta: now - base };
+}
+
+/* ---- niggles (the on-ramp) ---- */
+
+function logNiggle(exId, region, side) {
+  rehabInit();
+  S.rehab.niggles.push({ date: todayISO(), exId: exId || null, region, side: side || null });
+  if (S.rehab.niggles.length > 300) S.rehab.niggles = S.rehab.niggles.slice(-300);
+  save();
+}
+
+/* Four flags for one area inside three weeks earns the offer. */
+function niggleSuggestion() {
+  rehabInit();
+  if (activeTrack()) return null;
+  const since = Date.now() - 21 * DAY_MS;
+  const counts = {};
+  for (const n of S.rehab.niggles) {
+    if (new Date(n.date).getTime() < since) continue;
+    const k = n.region + '|' + (n.side || '');
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  let key = null, best = 0;
+  for (const k in counts) if (counts[k] > best) { best = counts[k]; key = k; }
+  if (best < 4 || S.rehab.dismissed === key) return null;
+  const [region, side] = key.split('|');
+  return { region, side: side || null, n: best, key };
 }
 
 function addToActive(def, opts) {
@@ -999,7 +1248,7 @@ function finishWorkout(force) {
   }
   if (doneSets === 0) {
     if (!confirm('No sets logged — discard this session?')) return;
-    S.active = null; stopRest(); releaseWakeLock(); save(); go('today'); return;
+    S.active = null; stopRest(); stopTempo(); releaseWakeLock(); save(); go('today'); return;
   }
   const entry = {
     date: todayISO(),
@@ -1017,10 +1266,11 @@ function finishWorkout(force) {
     v + e.sets.reduce((x, s) => x + (s.w || 0) * (s.r || 0), 0), 0);
   entry.setCount = entry.exercises.reduce((n, e) => n + e.sets.length, 0);
   entry.prs = computePRs(entry);
+  if (a.rehab) { entry.rehab = a.rehab; recordRehabSession(entry, a); }
   S.history.unshift(entry);
   S.active = null;
   lastFinished = entry; // transient — summary/cooldown read it this launch only
-  stopRest(); releaseWakeLock(); saveNow(); go('cooldown');
+  stopRest(); stopTempo(); releaseWakeLock(); saveNow(); go('cooldown');
 }
 
 /* Throw away the active session entirely — even with sets already logged. */
@@ -1031,7 +1281,7 @@ function discardSession() {
     : 'Discard this session?';
   if (!confirm(msg)) return;
   S.active = null;
-  stopRest(); releaseWakeLock(); saveNow();
+  stopRest(); stopTempo(); releaseWakeLock(); saveNow();
   toast('Session discarded.');
   go('today');
 }
@@ -1153,6 +1403,61 @@ function renderRestBar(left) {
    if the app is killed mid-block the block is lost, the session survives. */
 
 let hiitRun = null; // {tpl, idx, end, paused, left, started}
+
+/* ---------------- tempo guide ----------------
+   Heavy slow resistance only works if the tempo is real. Beeps the
+   turnaround so you don't have to count, and stops itself at the rep
+   target. Tap again to cancel. */
+
+let tempoTimer = null, tempoState = null;
+
+function startTempo(i) {
+  if (tempoState && tempoState.i === i) { stopTempo(); return; }
+  stopTempo();
+  const e = S.active && S.active.ex[i];
+  if (!e || !e.tempo) return;
+  ensureAudio();
+  const phases = [];
+  if (e.tempo.ecc) phases.push({ label: 'Down', secs: e.tempo.ecc });
+  if (e.tempo.con) phases.push({ label: 'Up', secs: e.tempo.con });
+  if (!phases.length) return;
+  tempoState = { i, phases, p: 0, left: phases[0].secs, reps: 0, target: e.reps[1] || 8 };
+  blip();
+  renderTempo();
+  tempoTimer = setInterval(tempoTick, 1000);
+}
+
+function tempoTick() {
+  if (!tempoState) { stopTempo(); return; }
+  const t = tempoState;
+  t.left--;
+  if (t.left <= 0) {
+    t.p = (t.p + 1) % t.phases.length;
+    if (t.p === 0) {
+      t.reps++;
+      if (t.reps >= t.target) { beep(); stopTempo(); return; }
+    }
+    t.left = t.phases[t.p].secs;
+    blip();
+  }
+  renderTempo();
+}
+
+function stopTempo() {
+  if (tempoTimer) clearInterval(tempoTimer);
+  tempoTimer = null; tempoState = null;
+  renderTempo();
+}
+
+function renderTempo() {
+  document.querySelectorAll('[data-a="tempo"]').forEach(b => {
+    const on = tempoState && tempoState.i === +b.dataset.i;
+    b.textContent = on
+      ? tempoState.phases[tempoState.p].label + ' ' + tempoState.left + ' · rep ' + (tempoState.reps + 1)
+      : 'Start guide';
+    b.classList.toggle('on', !!on);
+  });
+}
 
 function startHiitTpl(id) {
   const tpl = HIIT_TEMPLATES.find(t => t.id === id);
@@ -1425,6 +1730,7 @@ function render() {
     workout: viewWorkout, summary: viewSummary, history: viewHistory,
     trends: viewTrends, trend: viewTrend, bw: viewBodyweight, profile: viewProfile,
     cooldown: viewCooldown, review: viewReview, hiit: viewHiit,
+    rehab: viewRehab, 'rehab-setup': viewRehabSetup,
   };
   app.innerHTML = (views[route] || viewToday)();
 }
@@ -1537,6 +1843,9 @@ function viewToday() {
     ${scheduleBanner()}
     ${backupBanner()}
     ${cycleBanner()}
+    ${rehabCheckCard()}
+    ${rehabCard()}
+    ${niggleCard()}
     ${checkinCard()}
     <section class="card">
       <h2>Muscle groups</h2>
@@ -1577,6 +1886,7 @@ function hiitSheetHTML() {
 function groupLabels(ids) {
   if (ids.includes('freestyle')) return 'Freestyle';
   if (ids.includes('restorative')) return 'Restorative';
+  if (ids.includes('rebuild')) return 'Rebuild';
   if (ids.includes('hiit')) return 'HIIT';
   const labels = UI_GROUPS.filter(g => ids.includes(g.id)).map(g => g.label);
   return labels.length ? labels.join(' + ') : 'Session';
@@ -1696,22 +2006,27 @@ function viewPreview() {
       ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.webp" alt="" loading="lazy" decoding="async" data-zoom="' + esc(e.id) + '" data-zname="' + esc(e.name) + '">' : ''}
       <div class="ex-row-main">
         <strong>${esc(e.name)}</strong>
-        <span class="muted">${setsRepsText(e)}</span>
+        <span class="muted">${setsRepsText(e)}${e.tempo ? ' · ' + esc(tempoText(e.tempo)) : ''}</span>
       </div>
-      <button class="icon-btn" data-a="swap" data-i="${i}" title="Swap exercise">⇄</button>
+      ${d.rehab ? '' : '<button class="icon-btn" data-a="swap" data-i="' + i + '" title="Swap exercise">⇄</button>'}
     </div>`).join('');
+  const track = d.rehab ? trackById(d.rehab) : null;
   return `
   <div class="screen">
     <header class="top">
       <button class="back" data-a="nav" data-r="today">‹</button>
-      <div><h1>${esc(groupLabels(d.groups))}</h1>
-      <p class="muted small">${d.restorative ? 'Gentle & low-impact' : goal.label} · about ${d.est} min · ${d.ex.length} exercises</p></div>
+      <div><h1>${track ? esc(trackLabel(track)) : esc(groupLabels(d.groups))}</h1>
+      <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : goal.label} · about ${d.est} min · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
     </header>
     ${d.repeatOf ? '<div class="hint">Repeat of ' + esc(fmtDate(d.repeatOf)) + ' — same exercises and sets, weights refreshed from your latest numbers.</div>' : ''}
-    ${d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups)) + '</span></div>'}
+    ${d.advanced ? '<div class="card rb-good"><strong>Phase ' + d.advanced + ' — ' + esc(PHASE_META[d.advanced - 1].name) + '</strong><span class="muted">' + esc(PHASE_META[d.advanced - 1].blurb) + '</span></div>' : ''}
+    ${d.verdict && d.verdict.note ? '<div class="rb-verdict ' + esc(d.verdict.kind) + '">' + esc(d.verdict.note) + '</div>' : ''}
+    ${track
+      ? '<div class="card warm"><strong>Before you start</strong><span class="muted">A few easy minutes to get warm — a walk, a bike, or the first set taken very light. Up to 5 out of 10 during is fine. What matters is how it feels tomorrow morning.</span></div>'
+      : d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups)) + '</span></div>'}
     <div class="card list">${rows}</div>
     <div class="row-btns">
-      <button class="btn-ghost" data-a="regen">Reshuffle</button>
+      ${track ? '<button class="btn-ghost" data-a="nav" data-r="rehab">Back</button>' : '<button class="btn-ghost" data-a="regen">Reshuffle</button>'}
       <button class="btn-primary" data-a="start">Start</button>
     </div>
   </div>`;
@@ -1750,14 +2065,17 @@ function viewWorkout() {
       <div class="ring" id="ring" style="--p:${totalSets ? doneSets / totalSets : 0}"><span id="ring-txt">${Math.round(100 * doneSets / Math.max(1, totalSets))}%</span></div>
     </header>
     <div class="progress"><div class="progress-fill" id="pbar" style="width:${100 * doneSets / Math.max(1, totalSets)}%"></div></div>
-    ${freestyle && !a.ex.length ? '' : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups)) + '</span></div>'}
+    ${a.rehab ? '<div class="card warm rb"><strong>Rebuild · week ' + trackWeek(trackById(a.rehab) || { startedAt: todayISO() }) + '</strong><span class="muted">Up to 5 out of 10 during is fine. Stop a set if it sharpens past that — the morning check is what counts.</span></div>'
+      : freestyle && !a.ex.length ? '' : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups)) + '</span></div>'}
     ${cards}
-    <button class="add-ex" data-a="open-picker">＋ Add exercise</button>
+    ${a.rehab ? '' : '<button class="add-ex" data-a="open-picker">＋ Add exercise</button>'}
     ${a.ex.length ? '<button class="btn-primary big" data-a="finish">Finish session</button>' : ''}
     <button class="btn-danger" data-a="discard">Discard session</button>
     <div style="height:90px"></div>
   </div>
   ${S._picker ? pickerHTML() : ''}
+  ${S._rehabPain ? rehabPainSheet() : ''}
+  ${S._niggle ? niggleSheet() : ''}
   <div id="restbar" class="restbar">
     <div class="rest-fill"></div>
     <div class="rest-inner">
@@ -1829,10 +2147,12 @@ function exerciseCard(e, i) {
         <h2>${esc(e.name)}</h2>
         <div class="muted small">${setsRepsText(e)}</div>
       </div>
-      ${canSwap ? '<button class="icon-btn" data-a="swap" data-i="' + i + '" title="Swap">⇄</button>' : ''}
-      <button class="icon-btn" data-a="rm-ex" data-i="${i}" title="Remove">✕</button>
+      <button class="icon-btn niggle" data-a="niggle" data-i="${i}" title="This bugged me">✋</button>
+      ${canSwap && !e.rehabEx ? '<button class="icon-btn" data-a="swap" data-i="' + i + '" title="Swap">⇄</button>' : ''}
+      ${e.rehabEx ? '' : '<button class="icon-btn" data-a="rm-ex" data-i="' + i + '" title="Remove">✕</button>'}
     </div>
     ${demoHTML(e.id, e.name)}
+    ${e.tempo ? '<div class="tempo-line"><span>Tempo · ' + esc(tempoText(e.tempo)) + '</span><button class="tempo-btn" data-a="tempo" data-i="' + i + '">Start guide</button></div>' : ''}
     ${sugg.note ? '<div class="sugg' + (sugg.up ? ' up' : '') + '">' + esc(sugg.note) + '</div>' : ''}
     ${e.cue ? '<p class="cue">' + esc(e.cue) + '</p>' : ''}
     ${howtoHTML(e.id)}
@@ -2216,6 +2536,494 @@ function viewCooldown() {
 
 function volTxt(v) { return v >= 10000 ? (v / 1000).toFixed(1) + 'k' : Math.round(v); }
 
+/* ============================================================
+   Rebuild — screens
+   ============================================================ */
+
+/* Compact 0–10 tap scale. */
+function scaleRow(action, attrs, val, lo, hi, loLabel, hiLabel) {
+  let out = '<div class="scale">';
+  for (let i = lo; i <= hi; i++) {
+    out += '<button class="sc' + (val === i ? ' on' : '') + '" data-a="' + action + '" ' +
+      (attrs || '') + ' data-v="' + i + '">' + i + '</button>';
+  }
+  out += '</div>';
+  if (loLabel) out += '<div class="scale-ends"><span>' + esc(loLabel) + '</span><span>' + esc(hiLabel) + '</span></div>';
+  return out;
+}
+
+/* ----- Today cards ----- */
+
+/* The morning-after check. This is the most important interaction in the
+   whole feature — it's what the progression engine runs on. Four taps. */
+function rehabCheckCard() {
+  const due = rehabCheckDue();
+  if (!due) return '';
+  const t = due.track;
+  const pending = S._rehabCheck;
+  const wrap = inner => `
+    <section class="card rb-check">
+      <div class="kicker">Rebuild · morning check</div>
+      ${inner}
+    </section>`;
+
+  // stage 3 — where symptoms reach (back tracks with leg involvement only)
+  if (pending && typeof pending.amPain === 'number') {
+    return wrap(`
+      <h2>How far down does it go today?</h2>
+      <div class="rb-opts">
+        ${[['back', 'Stays in my back'], ['thigh', 'Into the buttock or thigh'],
+           ['calf', 'Into the calf'], ['foot', 'Into the foot']].map(([v, l]) =>
+          '<button class="rb-opt" data-a="rehab-leg" data-v="' + v + '">' + esc(l) + '</button>').join('')}
+      </div>`);
+  }
+
+  // stage 2 — a number for the trend line
+  if (pending) {
+    return wrap(`
+      <h2>Score it out of 10 this morning</h2>
+      <p class="muted small">This is what the trend chart is built from.</p>
+      ${scaleRow('rehab-am', '', null, 0, 10, 'nothing', 'worst imaginable')}`);
+  }
+
+  // stage 1 — the answer the engine actually runs on
+  const opts = [
+    ['better', 'Better than before'],
+    ['same', 'Same as before'],
+    ['sore-settled', 'Was sore, settled now'],
+    ['still-sore', 'Still sore right now'],
+  ];
+  return wrap(`
+    <h2>How’s the ${esc(trackLabel(t).toLowerCase())} today?</h2>
+    <p class="muted small">Compared with before your last session. This is what decides whether the load goes up, holds, or comes back down.</p>
+    <div class="rb-opts">
+      ${opts.map(([v, label]) => '<button class="rb-opt" data-a="rehab-check" data-v="' + v + '">' + esc(label) + '</button>').join('')}
+    </div>`);
+}
+
+/* The active track's card on Today. */
+function rehabCard() {
+  const t = activeTrack();
+  if (!t || S.active) return '';
+  const pat = patternOf(t);
+  const done = weekSessions(t);
+  const target = pat.freq;
+  const alert = rehabAlert(t);
+  return `
+    <section class="card rb-card${alert ? ' warn' : ''}">
+      <div class="rb-head">
+        <div>
+          <div class="kicker">Rebuild · week ${trackWeek(t)}</div>
+          <strong>${esc(trackLabel(t))}</strong>
+          <span class="muted small">${esc(phaseMeta(t).name)} · ${done}/${target} sessions this week</span>
+        </div>
+        <button class="icon-btn" data-a="nav" data-r="rehab" title="Open Rebuild">›</button>
+      </div>
+      ${alert ? '<div class="rb-alert-mini">' + esc(alert.title) + '</div>' : ''}
+      <button class="btn-primary" data-a="rehab-build">${dumbbellSVG()} Build today’s Rebuild session</button>
+    </section>`;
+}
+
+/* The on-ramp: enough niggles logged for one area to be worth offering. */
+function niggleCard() {
+  const s = niggleSuggestion();
+  if (!s || S.active) return '';
+  const where = s.side ? s.side + ' ' + regionLabel(s.region).toLowerCase() : regionLabel(s.region).toLowerCase();
+  return `
+    <section class="card rb-suggest">
+      <div class="kicker">Noticed something</div>
+      <p>Your <strong>${esc(where)}</strong> has come up ${s.n} times in the last three weeks.</p>
+      <div class="row-btns">
+        <button class="btn-ghost" data-a="niggle-dismiss" data-k="${esc(s.key)}">Not now</button>
+        <button class="btn-primary" data-a="rehab-start" data-region="${esc(s.region)}" data-side="${esc(s.side || '')}">Run a Rebuild block</button>
+      </div>
+    </section>`;
+}
+
+/* ----- intake wizard ----- */
+
+function wizSteps() {
+  const w = S._rehabWiz;
+  const steps = [{ t: 'region' }];
+  if (!w.region) return steps;
+  const reg = REHAB_REGIONS.find(r => r.id === w.region);
+  const intake = REHAB_INTAKE[w.region];
+  if (reg && reg.sided) steps.push({ t: 'side' });
+  steps.push({ t: 'flags' });
+  if (intake.selfTest && intake.selfTestFirst) steps.push({ t: 'selftest' });
+  (intake.steps || []).forEach(q => steps.push({ t: 'q', q }));
+  if (intake.selfTest && !intake.selfTestFirst) steps.push({ t: 'selftest' });
+  steps.push({ t: 'baseline' });
+  steps.push({ t: 'confirm' });
+  return steps;
+}
+
+/* Is the current step answered enough to move on? */
+function wizCanNext(step) {
+  const w = S._rehabWiz;
+  if (step.t === 'region') return !!w.region;
+  if (step.t === 'side') return !!w.side;
+  if (step.t === 'flags') return w.flags.length === 0 && w.flagsSeen;
+  if (step.t === 'selftest') return !!w.selfTest;
+  if (step.t === 'q') {
+    const v = w.answers[step.q.id];
+    return step.q.multi ? Array.isArray(v) && v.length > 0 : !!v;
+  }
+  if (step.t === 'baseline') {
+    return typeof w.baseline.worst === 'number' && typeof w.baseline.typical === 'number';
+  }
+  return true;
+}
+
+function viewRehabSetup() {
+  const w = S._rehabWiz;
+  if (!w) { route = 'today'; return viewToday(); }
+  const steps = wizSteps();
+  const i = Math.min(w.i, steps.length - 1);
+  const step = steps[i];
+  const intake = w.region ? REHAB_INTAKE[w.region] : null;
+  let body = '';
+
+  if (step.t === 'region') {
+    body = `
+      <h1>What’s bugging you?</h1>
+      <p class="muted">One area at a time. Rebuild works best when it isn’t split across two things at once.</p>
+      <div class="rb-opts">
+        ${REHAB_REGIONS.map(r => '<button class="rb-opt' + (w.region === r.id ? ' on' : '') +
+          '" data-a="wiz-region" data-v="' + r.id + '">' + esc(r.label) + '</button>').join('')}
+      </div>`;
+  }
+
+  else if (step.t === 'side') {
+    body = `
+      <h1>Which side?</h1>
+      <div class="rb-opts">
+        ${[['left', 'Left'], ['right', 'Right'], ['both', 'Both']].map(([v, l]) =>
+          '<button class="rb-opt' + (w.side === v ? ' on' : '') + '" data-a="wiz-side" data-v="' + v + '">' + l + '</button>').join('')}
+      </div>
+      ${w.side === 'both' ? '<p class="fine">Both sides makes for longer sessions — Rebuild will keep the exercise count down to compensate.</p>' : ''}`;
+  }
+
+  else if (step.t === 'flags') {
+    const list = (RED_FLAGS.universal || []).concat(RED_FLAGS[w.region] || []);
+    const urgent = RED_FLAG_URGENT[w.region];
+    const hit = w.flags.length > 0;
+    body = `
+      <h1>First, the important questions</h1>
+      <p class="muted">Any of these mean a person should look at it, not an app. Tap any that are true.</p>
+      <div class="rb-flags">
+        ${list.map((f, n) => '<button class="rb-flag' + (w.flags.includes(n) ? ' on' : '') +
+          '" data-a="wiz-flag" data-v="' + n + '">' + esc(f) + '</button>').join('')}
+      </div>
+      ${hit ? `<div class="card rb-stop">
+          <strong>Please get this looked at first</strong>
+          <p>${esc(urgent || 'What you’ve described is worth having someone examine before you start loading it. Rebuild isn’t the right tool until that’s ruled out.')}</p>
+          <button class="linkbtn" data-a="wiz-override">I’ve already been checked — continue anyway</button>
+        </div>` : `<button class="btn-primary mt" data-a="wiz-flags-none">None of these apply</button>`}`;
+  }
+
+  else if (step.t === 'selftest') {
+    const st = intake.selfTest;
+    const blocked = st.blockOn && w.selfTest === st.blockOn;
+    body = `
+      <h1>${esc(st.title)}</h1>
+      <p class="rb-body">${esc(st.body).replace(/\n/g, '<br>')}</p>
+      <h2>${esc(st.q)}</h2>
+      <div class="rb-opts">
+        ${st.opts.map(o => '<button class="rb-opt' + (w.selfTest === o.v ? ' on' : '') +
+          '" data-a="wiz-selftest" data-v="' + o.v + '"><span>' + esc(o.label) + '</span>' +
+          (o.sub ? '<em>' + esc(o.sub) + '</em>' : '') + '</button>').join('')}
+      </div>
+      ${blocked ? `<div class="card rb-stop">
+          <strong>${esc(st.blockTitle)}</strong>
+          <p>${esc(st.blockBody).replace(/\n/g, '<br>')}</p>
+          <button class="btn-primary" data-a="wiz-cancel">Understood</button>
+        </div>` : ''}`;
+  }
+
+  else if (step.t === 'q') {
+    const q = step.q;
+    const cur = w.answers[q.id];
+    body = `
+      <h1>${esc(q.q)}</h1>
+      ${q.multi ? '<p class="muted">Tap any that apply.</p>' : ''}
+      <div class="rb-opts">
+        ${q.opts.map(o => {
+          const on = q.multi ? (Array.isArray(cur) && cur.includes(o.v)) : cur === o.v;
+          return '<button class="rb-opt' + (on ? ' on' : '') + '" data-a="wiz-opt" data-q="' + q.id +
+            '" data-multi="' + (q.multi ? '1' : '') + '" data-v="' + o.v + '"><span>' + esc(o.label) + '</span>' +
+            (o.sub ? '<em>' + esc(o.sub) + '</em>' : '') + '</button>';
+        }).join('')}
+      </div>`;
+  }
+
+  else if (step.t === 'baseline') {
+    const b = w.baseline;
+    body = `
+      <h1>Where you’re starting</h1>
+      <p class="muted">So there’s something to compare against in six weeks. Be honest rather than brave.</p>
+      <h2>Worst it’s been in the last 24 hours</h2>
+      ${scaleRow('wiz-scale', 'data-k="worst"', b.worst, 0, 10, 'none', 'worst imaginable')}
+      <h2 class="mt">What it’s usually like</h2>
+      ${scaleRow('wiz-scale', 'data-k="typical"', b.typical, 0, 10, 'none', 'worst imaginable')}
+      <h2 class="mt">Three things it’s making hard</h2>
+      <p class="muted small">Your words — “going down stairs”, “sleeping on my left side”, “picking up my kid”. Rebuild asks you to re-rate these every two weeks, and it’s the best measure of whether this is working.</p>
+      ${[0, 1, 2].map(n => {
+        const p = b.psfs[n] || { task: '', score: null };
+        return `<div class="rb-psfs">
+          <input type="text" data-f="psfs-task" data-i="${n}" value="${esc(p.task)}" placeholder="Activity ${n + 1}" autocomplete="off">
+          ${scaleRow('wiz-psfs', 'data-i="' + n + '"', p.score, 0, 10, 'can’t do it', 'totally normal')}
+        </div>`;
+      }).join('')}`;
+  }
+
+  else if (step.t === 'confirm') {
+    const pattern = intake.route(w.answers);
+    if (!pattern) {
+      body = `
+        <h1>Rebuild can’t take this one</h1>
+        <p class="rb-body">${esc(intake.noRouteMsg || 'What you’ve described doesn’t match a track Rebuild can run safely.')}</p>
+        <button class="btn-primary" data-a="wiz-cancel">Okay</button>`;
+    } else {
+      const pat = REHAB_PATTERNS[pattern];
+      body = `
+        <h1>Here’s the plan</h1>
+        <div class="card rb-plan">
+          <strong>${esc(pat.label)}</strong>
+          <p class="muted">${esc(pat.summary)}</p>
+          <ul class="rb-facts">
+            <li><span>How long</span><strong>12 weeks</strong></li>
+            <li><span>How often</span><strong>${pat.freq}× a week</strong></li>
+            <li><span>Each session</span><strong>about 20–30 min</strong></li>
+            <li><span>Phases</span><strong>${phasesFor(pat).map(p => p.name).join(' → ')}</strong></li>
+          </ul>
+          ${pat.note ? '<p class="rb-note">' + esc(pat.note) + '</p>' : ''}
+        </div>
+        <p class="fine">This isn’t a diagnosis and it isn’t a substitute for seeing someone. It’s strength training, organised around the thing that hurts — and it stops and tells you if it isn’t working.</p>
+        <button class="btn-primary big" data-a="wiz-finish" data-p="${esc(pattern)}">Start Rebuild</button>`;
+    }
+  }
+
+  const canNext = wizCanNext(step);
+  const isLast = step.t === 'confirm';
+  return `
+  <div class="screen rb-wiz">
+    <header class="top">
+      <button class="back" data-a="${i === 0 ? 'wiz-cancel' : 'wiz-back'}">‹</button>
+      <div class="grow"><div class="kicker">Rebuild · step ${i + 1} of ${steps.length}</div></div>
+    </header>
+    <div class="rb-progress"><div style="width:${100 * (i + 1) / steps.length}%"></div></div>
+    <section class="card">${body}</section>
+    ${(!isLast && step.t !== 'flags') ? `<button class="btn-primary big" data-a="wiz-next" ${canNext ? '' : 'disabled'}>Continue</button>` : ''}
+  </div>`;
+}
+
+/* ----- track hub ----- */
+
+function viewRehab() {
+  const t = activeTrack() || rehabInit().tracks[rehabInit().tracks.length - 1];
+  if (!t) { route = 'today'; return viewToday(); }
+  const pat = patternOf(t);
+  const alert = rehabAlert(t);
+  const verdict = pendingVerdict(t);
+  const series = rehabPainSeries(t);
+  const delta = psfsDelta(t);
+  const phases = phasesFor(pat);
+
+  const rail = phases.map(p => {
+    const state = t.phase > p.n ? ' done' : t.phase === p.n ? ' now' : '';
+    return `<div class="rb-phase${state}"><span>${p.n}</span><strong>${esc(p.name)}</strong><em>${esc(p.weeks)}</em></div>`;
+  }).join('');
+
+  const chains = pat.chains.map(cid => {
+    const r = currentRung(t, cid);
+    const ids = REHAB_CHAINS[cid] || [];
+    if (r < 0) return '';
+    const ex = rehabEx(ids[r]);
+    const dose = t.dose[ex.id] || baseDose(ex);
+    const unit = ex.mode === 'time' ? ' sec' : ' reps';
+    return `<li><span>${esc(ex.name)}</span><strong>${dose.sets} × ${dose.reps}${unit}${dose.load ? ' · ' + fmtW(dose.load) + ' ' + unitLabel() : ''}</strong>
+      <em>rung ${r + 1} of ${ids.length}</em></li>`;
+  }).join('');
+
+  const psfsBlock = psfsDue(t) && (t.baseline.psfs || []).length ? `
+    <section class="card">
+      <h2>Time to re-rate</h2>
+      <p class="muted small">Same three activities, 0 = can’t do it, 10 = totally normal.</p>
+      ${(t.baseline.psfs || []).map((p, n) => `
+        <div class="rb-psfs"><strong>${esc(p.task)}</strong>
+        ${scaleRow('psfs-rate', 'data-i="' + n + '"', (S._psfsDraft || {})[n], 0, 10, 'can’t do it', 'totally normal')}</div>`).join('')}
+      <button class="btn-primary mt" data-a="psfs-save" ${(S._psfsDraft && Object.keys(S._psfsDraft).length === (t.baseline.psfs || []).length) ? '' : 'disabled'}>Save</button>
+    </section>` : (delta ? `
+    <section class="card">
+      <h2>What you can do</h2>
+      <p class="rb-delta ${delta.delta >= 2 ? 'good' : delta.delta <= -1 ? 'bad' : ''}">
+        ${delta.base.toFixed(1)} → <strong>${delta.now.toFixed(1)}</strong> out of 10
+        <span class="muted small">${delta.delta >= 2 ? 'That’s a real change.' : delta.delta > 0 ? 'Moving the right way.' : 'No change yet.'}</span>
+      </p>
+      ${(t.baseline.psfs || []).map((p, n) => {
+        const last = (t.psfsLog || [])[(t.psfsLog || []).length - 1];
+        return '<div class="rb-psfs-row"><span>' + esc(p.task) + '</span><strong>' + p.score + ' → ' + (last ? last.scores[n] : '—') + '</strong></div>';
+      }).join('')}
+    </section>` : '');
+
+  const capBlock = (pat.capacity || []).length ? (capacityDue(t) ? `
+    <section class="card">
+      <h2>Capacity check</h2>
+      <p class="muted small">Every four weeks. Objective, no equipment, and it’s what unlocks the last phase.</p>
+      ${pat.capacity.map(id => {
+        const c = CAPACITY_TESTS[id];
+        return `<div class="rb-cap">
+          <strong>${esc(c.label)}</strong>
+          <p class="muted small">${esc(c.how)}</p>
+          <label class="field"><span>Result (${esc(c.unit)})</span>
+            <input type="number" inputmode="numeric" min="0" data-f="cap" data-id="${esc(id)}" placeholder="—"></label>
+        </div>`;
+      }).join('')}
+      <button class="btn-primary" data-a="cap-save">Save results</button>
+    </section>` : ((t.capacity || []).length ? `
+    <section class="card">
+      <h2>Capacity</h2>
+      ${pat.capacity.map(id => {
+        const c = CAPACITY_TESTS[id];
+        const hits = (t.capacity || []).filter(x => x.test === id);
+        if (!hits.length) return '';
+        const first = hits[0], last = hits[hits.length - 1];
+        return '<div class="rb-psfs-row"><span>' + esc(c.label) + '</span><strong>' +
+          first.value + ' → ' + last.value + ' ' + esc(c.unit) + '</strong></div>';
+      }).join('')}
+    </section>` : '')) : '';
+
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="today">‹</button>
+      <div class="grow">
+        <div class="kicker">Rebuild · week ${trackWeek(t)} of 12</div>
+        <h1>${esc(trackLabel(t))}</h1>
+        <p class="muted small">${esc(pat.label)}</p>
+      </div>
+    </header>
+
+    ${alert ? `<section class="card rb-alert">
+      <strong>${esc(alert.title)}</strong>
+      <p>${esc(alert.body)}</p>
+    </section>` : ''}
+
+    <div class="rb-rail">${rail}</div>
+    <p class="muted small center">${esc(phaseMeta(t).blurb)}</p>
+
+    ${t.status === 'active' ? `
+    <section class="card">
+      <div class="rb-head">
+        <div><strong>${weekSessions(t)} of ${pat.freq} this week</strong>
+        <span class="muted small">${esc(verdict.note)}</span></div>
+      </div>
+      <button class="btn-primary" data-a="rehab-build">${dumbbellSVG()} Build today’s session</button>
+    </section>` : `
+    <section class="card rb-good">
+      <strong>${t.status === 'graduated' ? 'Rebuilt.' : 'Paused'}</strong>
+      <span class="muted">${t.status === 'graduated'
+        ? 'These exercises are part of your normal sessions now — they’ll show up in generated plans.'
+        : 'Pick it back up whenever you’re ready.'}</span>
+      ${t.status === 'paused' ? '<button class="btn-primary mt" data-a="rehab-resume" data-id="' + esc(t.id) + '">Resume</button>' : ''}
+    </section>`}
+
+    <section class="card">
+      <h2>Where you’re at</h2>
+      <ul class="rb-chains">${chains}</ul>
+    </section>
+
+    ${series.length >= 2 ? `<section class="card">
+      <h2>Morning pain</h2>
+      ${bigChartSVG(series)}
+      <p class="muted small">Logged the morning after each session. Down and to the right is the whole game.</p>
+    </section>` : ''}
+
+    ${psfsBlock}
+    ${capBlock}
+
+    <section class="card">
+      <h2>Worth knowing</h2>
+      ${(pat.edu || []).map(id => {
+        const e = REHAB_EDU[id];
+        if (!e) return '';
+        return '<details class="howto"><summary>' + esc(e.title) + '</summary><p class="muted small rb-body">' +
+          esc(e.body).replace(/\n/g, '<br>') + '</p></details>';
+      }).join('')}
+    </section>
+
+    ${t.status === 'active' ? `<div class="row-btns">
+      <button class="btn-ghost" data-a="rehab-pause" data-id="${esc(t.id)}">Pause</button>
+      <button class="btn-danger" data-a="rehab-stop" data-id="${esc(t.id)}">Stop this block</button>
+    </div>` : ''}
+    <div style="height:80px"></div>
+  </div>
+  ${tabbar('today')}`;
+}
+
+/* ----- profile section ----- */
+
+function rehabSettings() {
+  const tracks = rehabInit().tracks;
+  const active = activeTrack();
+  const rows = tracks.slice().reverse().map(t => {
+    const status = t.status === 'active' ? 'Week ' + trackWeek(t) + ' · ' + phaseMeta(t).name
+      : t.status === 'graduated' ? 'Rebuilt' : t.status === 'paused' ? 'Paused' : 'Stopped';
+    return `<div class="rb-track-row">
+      <div><strong>${esc(trackLabel(t))}</strong><span class="muted small">${esc(status)}</span></div>
+      ${t.status === 'paused' && !active ? '<button class="linkbtn" data-a="rehab-resume" data-id="' + esc(t.id) + '">Resume</button>' : ''}
+      ${t.status === 'active' ? '<button class="linkbtn" data-a="nav" data-r="rehab">Open</button>' : ''}
+    </div>`;
+  }).join('');
+  return `
+    <section class="card">
+      <h2>Rebuild</h2>
+      <p class="muted small">A twelve-week loading program for one cranky area at a time. Progression is decided by how it feels the next morning, not by how many reps you hit.</p>
+      ${rows || '<p class="muted small">No blocks yet.</p>'}
+      ${active
+        ? '<p class="fine mt">One block at a time — rehab adherence dies at volume. Pause this one to start another.</p>'
+        : '<button class="btn-primary mt" data-a="rehab-start">Start a Rebuild block</button>'}
+    </section>`;
+}
+
+/* ----- sheets ----- */
+
+/* During-session pain, asked once at Finish. */
+function rehabPainSheet() {
+  return `
+  <div class="overlay" data-a="close-sheet">
+    <div class="sheet" data-stop>
+      <div class="sheet-head"><h2>Worst it felt during that session</h2>
+      <button class="icon-btn" data-a="close-sheet">✕</button></div>
+      <p class="muted small">Up to 5 is fine and expected. Above that and Rebuild will ease off next time.</p>
+      ${scaleRow('rehab-pain', '', null, 0, 10, 'nothing', 'had to stop')}
+    </div>
+  </div>`;
+}
+
+/* "This bugged me" — region + side, two taps. */
+function niggleSheet() {
+  const ex = S._niggle && S._niggle.exId ? findEx(S._niggle.exId) : null;
+  const reg = S._niggle && S._niggle.region;
+  return `
+  <div class="overlay" data-a="close-sheet">
+    <div class="sheet" data-stop>
+      <div class="sheet-head"><h2>What bugged you?</h2>
+      <button class="icon-btn" data-a="close-sheet">✕</button></div>
+      ${ex ? '<p class="muted small">During ' + esc(ex.name) + '</p>' : ''}
+      ${!reg ? `<div class="rb-opts">
+        ${REHAB_REGIONS.map(r => '<button class="rb-opt" data-a="niggle-region" data-v="' + r.id + '">' + esc(r.label) + '</button>').join('')}
+      </div>` : `<p class="muted small">${esc(regionLabel(reg))} — which side?</p>
+      <div class="rb-opts">
+        ${[['left', 'Left'], ['right', 'Right'], ['both', 'Both / n/a']].map(([v, l]) =>
+          '<button class="rb-opt" data-a="niggle-side" data-v="' + v + '">' + l + '</button>').join('')}
+      </div>`}
+      <p class="fine">Just logged, nothing happens yet. If one area keeps coming up, Rebuild will offer you a block.</p>
+    </div>
+  </div>`;
+}
+
 function viewHistory() {
   const st = weekStats();
   // render the recent page only — a years-long log shouldn't rebuild in full
@@ -2544,6 +3352,7 @@ function viewProfile() {
     </section>
     ${scheduleSettings()}
     ${cycleSettings()}
+    ${rehabSettings()}
     <section class="card">
       <h2>Gym equipment</h2>
       <p class="muted small">Turn off anything your gym doesn't have and plans will route around it.</p>
@@ -2739,6 +3548,163 @@ document.addEventListener('click', ev => {
     save(); go('preview');
   }
 
+  /* ---- Rebuild ---- */
+
+  else if (a === 'rehab-start') {
+    if (activeTrack()) { toast('Finish or pause your current Rebuild block first.'); return; }
+    S._rehabWiz = {
+      i: 0, region: el.dataset.region || null, side: el.dataset.side || null,
+      flags: [], flagsSeen: false, answers: {}, selfTest: null,
+      baseline: { worst: null, typical: null, psfs: [{ task: '', score: null }, { task: '', score: null }, { task: '', score: null }] },
+    };
+    if (S._rehabWiz.region) S._rehabWiz.i = 1; // came from a niggle — region is known
+    go('rehab-setup');
+  }
+
+  else if (a === 'wiz-cancel') { S._rehabWiz = null; go('today'); }
+  else if (a === 'wiz-back') { S._rehabWiz.i = Math.max(0, S._rehabWiz.i - 1); render(); }
+  else if (a === 'wiz-next') { S._rehabWiz.i++; render(); }
+  else if (a === 'wiz-region') { S._rehabWiz.region = el.dataset.v; S._rehabWiz.side = null; render(); }
+  else if (a === 'wiz-side') { S._rehabWiz.side = el.dataset.v; render(); }
+  else if (a === 'wiz-flag') {
+    const n = +el.dataset.v;
+    const f = S._rehabWiz.flags;
+    const i2 = f.indexOf(n);
+    if (i2 >= 0) f.splice(i2, 1); else f.push(n);
+    render();
+  }
+  else if (a === 'wiz-flags-none') { S._rehabWiz.flagsSeen = true; S._rehabWiz.i++; render(); }
+  else if (a === 'wiz-override') {
+    if (!confirm('Only continue if a clinician has already looked at this. Continue?')) return;
+    S._rehabWiz.flags = []; S._rehabWiz.flagsSeen = true; S._rehabWiz.overrode = true;
+    S._rehabWiz.i++; render();
+  }
+  else if (a === 'wiz-selftest') { S._rehabWiz.selfTest = el.dataset.v; render(); }
+  else if (a === 'wiz-opt') {
+    const w = S._rehabWiz, q = el.dataset.q, v = el.dataset.v;
+    if (el.dataset.multi) {
+      const cur = Array.isArray(w.answers[q]) ? w.answers[q].slice() : [];
+      const at = cur.indexOf(v);
+      if (at >= 0) cur.splice(at, 1); else cur.push(v);
+      w.answers[q] = cur;
+    } else w.answers[q] = v;
+    render();
+  }
+  else if (a === 'wiz-scale') { S._rehabWiz.baseline[el.dataset.k] = +el.dataset.v; render(); }
+  else if (a === 'wiz-psfs') {
+    S._rehabWiz.baseline.psfs[+el.dataset.i].score = +el.dataset.v; render();
+  }
+  else if (a === 'wiz-finish') {
+    const w = S._rehabWiz;
+    const psfs = w.baseline.psfs.filter(p => p.task && typeof p.score === 'number');
+    const track = createTrack(w.region, w.side, el.dataset.p, w.answers,
+      { worst: w.baseline.worst, typical: w.baseline.typical, psfs }, w.selfTest === 'ext' ? 'ext' : w.selfTest === 'flex' ? 'flex' : null);
+    rehabInit().tracks.push(track);
+    S._rehabWiz = null;
+    saveNow(); go('rehab');
+  }
+
+  else if (a === 'rehab-build') {
+    const t = activeTrack();
+    if (!t) return;
+    const plan = buildRehabSession(t);
+    if (!plan) { toast('No exercises match your equipment — check Profile → Gym equipment.'); return; }
+    S.draft = plan;
+    save(); go('preview');
+  }
+
+  else if (a === 'rehab-check') { S._rehabCheck = { nextDay: el.dataset.v }; render(); }
+  else if (a === 'rehab-am') {
+    const t = activeTrack();
+    S._rehabCheck.amPain = +el.dataset.v;
+    const pat = t && patternOf(t);
+    if (pat && pat.watchCentralisation) { render(); return; } // one more question
+    recordRehabCheck(t, S._rehabCheck);
+    S._rehabCheck = null;
+    toast('Logged. That’s what tomorrow’s session is built on.');
+    render();
+  }
+  else if (a === 'rehab-leg') {
+    const t = activeTrack();
+    S._rehabCheck.leg = el.dataset.v;
+    recordRehabCheck(t, S._rehabCheck);
+    S._rehabCheck = null;
+    toast('Logged.');
+    render();
+  }
+
+  else if (a === 'rehab-pain') {
+    S.active.duringPain = +el.dataset.v;
+    S._rehabPain = null;
+    finishWorkout(true);
+  }
+
+  else if (a === 'rehab-pause' || a === 'rehab-stop') {
+    const t = trackById(el.dataset.id);
+    if (!t) return;
+    if (a === 'rehab-stop' && !confirm('Stop this Rebuild block? Your log stays, but it won’t suggest sessions any more.')) return;
+    t.status = a === 'rehab-pause' ? 'paused' : 'stopped';
+    saveNow(); go('today');
+  }
+  else if (a === 'rehab-resume') {
+    const t = trackById(el.dataset.id);
+    if (!t) return;
+    if (activeTrack()) { toast('Pause the other block first.'); return; }
+    t.status = 'active'; saveNow(); render();
+  }
+
+  else if (a === 'psfs-rate') {
+    S._psfsDraft = S._psfsDraft || {};
+    S._psfsDraft[+el.dataset.i] = +el.dataset.v;
+    render();
+  }
+  else if (a === 'psfs-save') {
+    const t = activeTrack();
+    const n = (t.baseline.psfs || []).length;
+    const scores = [];
+    for (let k = 0; k < n; k++) scores.push(S._psfsDraft[k]);
+    t.psfsLog = t.psfsLog || [];
+    t.psfsLog.push({ date: todayISO(), scores });
+    S._psfsDraft = null;
+    saveNow(); toast('Saved.'); render();
+  }
+  else if (a === 'cap-save') {
+    const t = activeTrack();
+    let n = 0;
+    document.querySelectorAll('[data-f="cap"]').forEach(inp => {
+      const v = parseFloat(inp.value);
+      if (v >= 0) { (t.capacity = t.capacity || []).push({ date: todayISO(), test: inp.dataset.id, value: v }); n++; }
+    });
+    if (!n) { toast('Enter at least one result.'); return; }
+    saveNow(); toast('Capacity logged.'); render();
+  }
+
+  else if (a === 'tempo') startTempo(+el.dataset.i);
+
+  /* ---- niggles ---- */
+
+  else if (a === 'niggle') {
+    const e = S.active.ex[+el.dataset.i];
+    S._niggle = { exId: e ? e.id : null, region: null };
+    render();
+  }
+  else if (a === 'niggle-region') { S._niggle.region = el.dataset.v; render(); }
+  else if (a === 'niggle-side') {
+    logNiggle(S._niggle.exId, S._niggle.region, el.dataset.v === 'both' ? null : el.dataset.v);
+    S._niggle = null;
+    toast('Logged. Nothing changes today.');
+    render();
+  }
+  else if (a === 'niggle-dismiss') {
+    rehabInit().dismissed = el.dataset.k;
+    save(); render();
+  }
+  else if (a === 'close-sheet') {
+    // tapping inside the sheet must not dismiss it — only the backdrop or ✕
+    if (ev.target.closest('[data-stop]') && !ev.target.closest('.icon-btn[data-a="close-sheet"]')) return;
+    S._niggle = null; S._rehabPain = null; render();
+  }
+
   else if (a === 'sched-build' || a === 'sched-catchup') {
     const p = a === 'sched-build' ? scheduleToday() : missedSplit();
     if (!p) return;
@@ -2786,7 +3752,15 @@ document.addEventListener('click', ev => {
   else if (a === 'swap') swapExercise(+el.dataset.i);
   else if (a === 'start') startWorkout();
   else if (a === 'set-done') setDone(+el.dataset.i, +el.dataset.j);
-  else if (a === 'finish') finishWorkout(false);
+  else if (a === 'finish') {
+    // a Rebuild session needs its during-pain score before it can be logged
+    if (S.active && S.active.rehab && typeof S.active.duringPain !== 'number') {
+      const doneSets = S.active.ex.reduce((n, e) => n + e.log.filter(s => s.done).length, 0);
+      if (!doneSets) { finishWorkout(false); return; }
+      S._rehabPain = true; render(); return;
+    }
+    finishWorkout(false);
+  }
   else if (a === 'discard') discardSession();
 
   else if (a === 'hiit-menu') { S._hiitSheet = true; render(); }
@@ -2991,6 +3965,9 @@ document.addEventListener('input', ev => {
     S.schedule.cardioDay = el.checked;
     S.schedule.variant = 0;
     rebuildSchedule(); render();
+  } else if (f === 'psfs-task') {
+    // no re-render: that would steal focus mid-word. The scale is always shown.
+    if (S._rehabWiz) S._rehabWiz.baseline.psfs[+el.dataset.i].task = el.value.trim();
   } else if (f === 'exnote') {
     const v = el.value.trim();
     if (v) S.notes[el.dataset.id] = v; else delete S.notes[el.dataset.id];
@@ -3127,6 +4104,8 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 /* ---------------- boot ---------------- */
 
 delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; S._schedEdit = null; // transient view state, fresh each launch
+S._rehabWiz = null; S._rehabCheck = null; S._rehabPain = null; S._niggle = null; S._psfsDraft = null;
+rehabInit();
 applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();

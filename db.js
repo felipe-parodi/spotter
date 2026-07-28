@@ -15,6 +15,7 @@ const EQUIPMENT = [
   { id: 'rack',       label: 'Squat rack / pull-up bar' },
   { id: 'smith',      label: 'Smith machine' },
   { id: 'kettlebell', label: 'Kettlebells' },
+  { id: 'band',       label: 'Resistance bands' },
   { id: 'treadmill',  label: 'Treadmill' },
   { id: 'bike',       label: 'Stationary bike' },
   { id: 'rower',      label: 'Rowing machine' },
@@ -24,7 +25,7 @@ const EQUIPMENT = [
 
 const EQ_LABEL = {
   dumbbell: 'Dumbbells', bench: 'Bench', cable: 'Cable', barbell: 'Barbell',
-  rack: 'Rack', smith: 'Smith machine', kettlebell: 'Kettlebell', bodyweight: 'Bodyweight',
+  rack: 'Rack', smith: 'Smith machine', kettlebell: 'Kettlebell', bodyweight: 'Bodyweight', band: 'Band',
   treadmill: 'Treadmill', bike: 'Bike', rower: 'Rower', elliptical: 'Elliptical', stairs: 'Stairs',
 };
 

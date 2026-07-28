@@ -15,7 +15,7 @@ after install — each phone keeps its own profile and history.
   cardio day breaks up dense weeks, and any day is tap-to-override (with a
   warning, never a block). Today shows the plan with one-tap build, a mini week
   strip, and a "you missed X — swap it in?" catch-up when it's safe.
-- Plans are built from a ~65-exercise database — now including **cardio**
+- Plans are built from a ~65-exercise database (plus ~40 Rebuild-only movements) — now including **cardio**
   (treadmill, bike, rower, elliptical, stair climber, jump rope; logged in
   minutes) — filtered by your gym's equipment (toggle what your gym has in
   **Profile → Gym equipment**). Selecting the Cardio chip appends one cardio
@@ -44,6 +44,19 @@ after install — each phone keeps its own profile and history.
   trained, with hold timers — skippable), then a summary with a deliberately
   **conservative calorie estimate** (MET-based; only shown when a bodyweight
   is logged).
+- **Rebuild** — an optional 12-week rehab track for one cranky area at a time
+  (knee, lower back, shoulder, outer hip, calf/Achilles, elbow, neck). A short
+  intake routes you on *what provokes it* rather than a diagnosis, behind a
+  blocking red-flag screen. Then it builds 20–30 min sessions from progression
+  ladders, and — the important part — **progression is gated on how it feels the
+  next morning**, not on reps hit. Two good mornings in a row and the load goes
+  up; one bad one and it comes back down. Tracks morning pain, your own three
+  “things this is making hard”, and a four-weekly capacity test; tells you
+  plainly when six weeks have passed with no change. At week 12 the exercises
+  graduate into your normal generated plans. See the science note below.
+- Tap **✋** on any exercise mid-session to log that something bugged you. Four
+  flags for one area in three weeks and Spotter offers to run a Rebuild block —
+  which is a much better front door than a menu.
 - Optional **cycle-aware mode** for those who want it (see the science note below).
 - Add exercises mid-workout (search the database or create custom ones — leg
   press, anything), start a blank freestyle session, or **discard** a session
@@ -56,6 +69,38 @@ after install — each phone keeps its own profile and history.
 
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).
+
+## On Rebuild (rehab mode)
+
+Rebuild is **not a diagnosis and not a substitute for seeing someone.** It's
+progressive strength training, organised around the thing that hurts, with the
+guardrails that actually have evidence behind them. Full design rationale and
+per-track citations live in [`REHAB-SPEC.md`](REHAB-SPEC.md); the short version:
+
+- **Progression runs on the 24-hour response.** Up to ~5/10 during loading is
+  fine, it should have settled by the next morning, and it must not climb week
+  over week — Silbernagel's pain-monitoring model, implemented literally in
+  `classifySession()`. Two greens to step up, one red to step down, and *no
+  morning check means no progression* (no data, no risk).
+- **Some pain is allowed.** Smith et al. (2017, *BJSM*) found painful protocols
+  slightly beat pain-free ones short term (SMD −0.27). So Rebuild never says
+  "stop if it hurts" — it says "tell me about tomorrow."
+- **A good self-guided program is near the ceiling.** GRASP (n=708, 20 NHS
+  trusts) found six sessions of tailored physio no better than *one* advice
+  session plus a band and self-progressed home exercises: SPADI difference at 12
+  months −0.66 (99% CI −4.52 to 3.20). That's the whole argument for building
+  this into an app — and for not over-engineering it.
+- **Twelve weeks, said on day one.** Most people quit around week 3 because
+  nothing has changed yet. Managing that expectation is probably worth more than
+  any exercise-selection decision in the feature.
+- **Safety is a gate, not a footer.** Red flags block the program before it's
+  generated; cauda equina gets its own same-day-care screen. The shoulder track
+  opens with a self-administered *passive* external rotation test, because
+  running a loading program on a frozen shoulder is the wrong tool.
+- **It tells you when it isn't working.** Three sore mornings in four sessions
+  drops a phase; a rising weekly trend eases the load; six weeks without change
+  says see a physio; back symptoms travelling further down the leg stop it.
+- **One block at a time.** Rehab adherence dies at volume.
 
 ## On the cycle-aware feature
 
@@ -124,6 +169,7 @@ New photos are fetched in the background and stale ones pruned automatically.
 | `index.html` | Shell — loads everything |
 | `styles.css` | All styling ("Bloom": soft coral, rounded, dark mode auto) |
 | `db.js` | Exercise database + goal parameters |
+| `rehab.js` | Rebuild: tracks, chains, rehab exercises, progression engine |
 | `app.js` | Generator, workout flow, progression, storage |
 | `sw.js` | Offline cache (bump `VERSION` on deploy!) |
 | `precache-manifest.js` | Generated list of demo images (don't edit) |
@@ -131,6 +177,9 @@ New photos are fetched in the background and stale ones pruned automatically.
 | `img/` | Exercise demo photos (public domain) |
 | `tools/make_icons.py` | Regenerates `icons/` (pure Python, no deps) |
 | `tools/fetch_images.py` | Re-downloads/re-maps demo photos (WebP; needs Pillow) |
-| `tools/test/` | Logic, browser E2E, SW-update, and perf tests — see its README |
+| `tools/test/` | Logic, browser E2E, Rebuild E2E, SW-update, and perf tests — see its README |
 
 Data lives in `localStorage` under the key `spotter-v1`.
+
+Rebuild adds `S.rehab` — `tracks[]` (one 12-week block each) and `niggles[]`.
+Old backups without it load fine; the key is created on first launch.

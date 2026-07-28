@@ -280,4 +280,477 @@ S.active = null;
 S.profile.goal = 'muscle';
 assert(restText(90) === '1½ min', 'rest reads as 1½ min (' + restText(90) + ')');
 
+
+/* ============================================================
+   Rebuild (rehab mode)
+   ============================================================ */
+
+// --- data integrity: every cross-reference resolves ---
+{
+  let bad = [];
+  for (const [key, pat] of Object.entries(REHAB_PATTERNS)) {
+    if (!REHAB_REGIONS.some(r => r.id === pat.region)) bad.push(key + ': region ' + pat.region);
+    for (const c of pat.chains) if (!REHAB_CHAINS[c]) bad.push(key + ': chain ' + c);
+    for (const e of (pat.edu || [])) if (!REHAB_EDU[e]) bad.push(key + ': edu ' + e);
+    for (const c of (pat.capacity || [])) if (!CAPACITY_TESTS[c]) bad.push(key + ': capacity ' + c);
+    if (pat.isoPrimer && !rehabEx(pat.isoPrimer)) bad.push(key + ': isoPrimer ' + pat.isoPrimer);
+    for (const ph of [1, 2, 3, 4]) {
+      for (const t of (pat.excludes[ph] || [])) if (!PROVOKE_TAGS.includes(t)) bad.push(key + ': tag ' + t);
+    }
+  }
+  assert(!bad.length, 'every pattern cross-reference resolves' + (bad.length ? ' — ' + bad.join('; ') : ''));
+}
+
+{
+  let bad = [];
+  for (const [cid, ids] of Object.entries(REHAB_CHAINS)) {
+    for (const id of ids) {
+      const ex = rehabEx(id);
+      if (!ex) { bad.push(cid + '/' + id + ' missing'); continue; }
+      if (!ex.repRange || !ex.baseSets) bad.push(cid + '/' + id + ' has no dose ladder');
+      if (ex.repRange && ex.repRange[1] <= ex.repRange[0]) bad.push(cid + '/' + id + ' bad repRange');
+    }
+  }
+  assert(!bad.length, 'every chain exercise resolves and has a dose ladder' + (bad.length ? ' — ' + bad.join('; ') : ''));
+}
+
+{
+  let bad = [];
+  for (const r of REHAB_REGIONS) if (!REHAB_INTAKE[r.id]) bad.push('no intake for ' + r.id);
+  for (const k of Object.keys(REHAB_INTAKE)) if (!REHAB_REGIONS.some(r => r.id === k)) bad.push('orphan intake ' + k);
+  assert(!bad.length, 'every region has intake questions' + (bad.length ? ' — ' + bad.join('; ') : ''));
+}
+
+// every routable combination of answers lands on a real pattern (or an
+// explicit null with a message explaining why)
+{
+  let bad = [];
+  for (const [region, intake] of Object.entries(REHAB_INTAKE)) {
+    const steps = intake.steps || [];
+    const combos = [{}];
+    for (const s of steps) {
+      const out = [];
+      for (const c of combos) {
+        for (const o of s.opts) {
+          const n = Object.assign({}, c);
+          n[s.id] = s.multi ? [o.v] : o.v;
+          out.push(n);
+        }
+      }
+      combos.length = 0; combos.push(...out);
+    }
+    for (const c of combos) {
+      const p = intake.route(c);
+      if (p === null) { if (!intake.noRouteMsg) bad.push(region + ': null route with no message'); continue; }
+      if (!REHAB_PATTERNS[p]) bad.push(region + ': routed to unknown pattern ' + p);
+    }
+  }
+  assert(!bad.length, 'every intake answer combination routes somewhere valid' + (bad.length ? ' — ' + bad.join('; ') : ''));
+}
+
+// --- rehab exercises stay out of normal plans ---
+{
+  let leaked = [];
+  for (let i = 0; i < 25; i++) {
+    const p = generateWorkout(['full'], 60);
+    p.ex.forEach(e => { const d = findEx(e.id); if (d && d.rehab) leaked.push(e.id); });
+  }
+  assert(!leaked.length, 'rehab-only exercises never appear in normal plans' + (leaked.length ? ' — ' + leaked.join(',') : ''));
+}
+
+// --- a track can be created for every pattern, and builds a session ---
+{
+  let bad = [];
+  for (const key of Object.keys(REHAB_PATTERNS)) {
+    const pat = REHAB_PATTERNS[key];
+    const t = createTrack(pat.region, 'left', key, {}, { worst: 6, typical: 4, psfs: [] }, null);
+    const plan = buildRehabSession(t);
+    if (!plan || !plan.ex.length) { bad.push(key + ': empty session'); continue; }
+    if (plan.ex.some(e => !e.sets || !e.reps || e.reps[0] <= 0)) bad.push(key + ': bad dose');
+  }
+  assert(!bad.length, 'every pattern builds a first session' + (bad.length ? ' — ' + bad.join('; ') : ''));
+}
+
+// --- the 24-hour rule drives progression ---
+let rbClock = Date.now() - 40 * 864e5;
+function rbSession(t, pain, nextDay, amPain) {
+  const plan = buildRehabSession(t);
+  rbClock += 864e5;
+  t.sessions.push({ date: new Date(rbClock).toISOString(), phase: t.phase,
+    exIds: plan ? plan.ex.map(e => e.id) : [], duringPain: pain, cls: null });
+  if (nextDay) {
+    rbClock += 12 * 3600e3;
+    t.checks.push({ date: new Date(rbClock).toISOString(), for: t.sessions[t.sessions.length - 1].date, nextDay, amPain });
+    const s = lastSession(t);
+    s.cls = classifySession(s, checkForSession(t, s), t);
+  }
+  return plan;
+}
+function rbTrack(pattern, region) {
+  const t = createTrack(region, 'left', pattern, {}, { worst: 6, typical: 4, psfs: [] }, null);
+  t.startedAt = new Date(rbClock).toISOString();
+  t.phaseStartedAt = t.startedAt;
+  return t;
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  const primary = REHAB_CHAINS['knee-quad'][0];
+  const start = t.dose[primary].reps;
+  rbSession(t, 3, 'same', 2);                       // green #1
+  assert(pendingVerdict(t).kind === 'hold', 'one green holds — a single good day is noise');
+  rbSession(t, 3, 'better', 1);                     // green #2
+  assert(pendingVerdict(t).kind === 'up', 'two greens in a row earn a step up');
+  buildRehabSession(t);
+  assert(t.dose[primary].reps > start, 'progressing raises the dose (' + start + ' → ' + t.dose[primary].reps + ')');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  rbSession(t, 3, 'same', 2);
+  rbSession(t, 3, 'better', 1);
+  buildRehabSession(t);                              // now one step up
+  const raised = t.dose[REHAB_CHAINS['knee-quad'][0]].reps;
+  rbSession(t, 8, 'still-sore', 7);                  // red
+  assert(pendingVerdict(t).kind === 'down', 'a red session steps back down');
+  buildRehabSession(t);
+  assert(t.dose[REHAB_CHAINS['knee-quad'][0]].reps < raised, 'regression actually lowers the dose');
+  assert(t.greenStreak === 0, 'a red resets the green streak');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  const primary = REHAB_CHAINS['knee-quad'][0];
+  const start = t.dose[primary].reps;
+  rbSession(t, 4, 'sore-settled', 3);
+  assert(pendingVerdict(t).kind === 'hold', 'sore-but-settled holds rather than adding');
+  buildRehabSession(t);
+  assert(t.dose[primary].reps === start, 'amber leaves the dose alone');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  const primary = REHAB_CHAINS['knee-quad'][0];
+  const start = t.dose[primary].reps;
+  rbSession(t, 2, null);                             // no morning check logged
+  assert(pendingVerdict(t).kind === 'hold', 'no morning check means no progression');
+  buildRehabSession(t);
+  assert(t.dose[primary].reps === start, 'unknown response leaves the dose alone');
+}
+
+{
+  const t = rbTrack('knee-tendon', 'knee');
+  rbSession(t, 5, 'same', 3);
+  assert(lastSession(t).cls === 'green', 'pain of exactly 5 during is still green');
+  rbSession(t, 6, 'same', 3);
+  assert(lastSession(t).cls === 'red', 'pain above 5 during is red even if the morning is fine');
+}
+
+// --- dose ladder walks reps → load → sets, then advances the rung ---
+{
+  const ex = rehabEx('rh-calf-raise-flat');   // reps 12–15, loadable
+  let d = baseDose(ex);
+  assert(d.reps === 12 && d.sets === 3, 'base dose starts at the bottom of the range');
+  d = nextDose(d, ex);
+  assert(d.reps > 12 && d.load === 0, 'reps rise before load');
+  while (d.reps < ex.repRange[1]) d = nextDose(d, ex);
+  d = nextDose(d, ex);
+  assert(d.load > 0 && d.reps === ex.repRange[0], 'topping out the reps adds load and resets reps');
+  const back = prevDose(d, ex);
+  assert(back.load === 0, 'prevDose is the inverse');
+
+  const iso = rehabEx('rh-quad-iso');          // not loadable, setCap === baseSets
+  let e = { sets: iso.setCap, reps: iso.repRange[1], load: 0 };
+  assert(nextDose(e, iso) === null, 'a maxed-out non-loadable rung reports it is done');
+}
+
+{
+  const t = rbTrack('calf-mid', 'calf');
+  const cid = 'calf';
+  const before = currentRung(t, cid);
+  const ex = rehabEx(REHAB_CHAINS[cid][before]);
+  t.dose[ex.id] = { sets: ex.setCap, reps: ex.repRange[1], load: 0 };  // maxed
+  applyVerdict(t, { kind: 'up', cls: 'green' });
+  assert(currentRung(t, cid) > before, 'maxing a rung advances the chain (' + before + ' → ' + currentRung(t, cid) + ')');
+}
+
+// --- phases gate the top of the chain ---
+{
+  const t = rbTrack('pfp', 'knee');
+  const cap1 = maxRung('knee-quad', t, 1);
+  t.phase = 2;
+  const cap2 = maxRung('knee-quad', t, 2);
+  assert(cap2 > cap1, 'phase 2 unlocks harder rungs than phase 1 (' + cap1 + ' → ' + cap2 + ')');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  for (let i = 0; i < 6; i++) rbSession(t, 2, 'better', 1);
+  assert(canAdvancePhase(t), 'six green sessions at low pain earns phase 2');
+  const plan = buildRehabSession(t);
+  assert(t.phase === 2, 'building the next session advances the phase');
+  assert(plan.advanced === 2, 'the plan reports the phase change so the UI can say so');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  for (let i = 0; i < 6; i++) rbSession(t, 2, 'better', 1);
+  t.sessions.forEach(s => { s.cls = 'red'; });
+  assert(!canAdvancePhase(t), 'sessions that came back sore do not count toward a phase');
+}
+
+{
+  const t = rbTrack('knee-oa', 'knee');
+  assert(nextPhaseNumber(Object.assign({}, t, { phase: 2 })) === 4, 'OA and back tracks skip the plyometric phase');
+  assert(phasesFor(REHAB_PATTERNS['knee-oa']).length === 3, 'skipPhase3 patterns show three phases');
+}
+
+// --- exclusion tags actually exclude ---
+{
+  const t = rbTrack('hip-lateral', 'hip');
+  const all = [];
+  for (const cid of REHAB_PATTERNS['hip-lateral'].chains) {
+    for (const id of REHAB_CHAINS[cid]) {
+      for (const ph of [1, 2, 3, 4]) if (rehabExOK(rehabEx(id), t, ph)) all.push(id);
+    }
+  }
+  const offenders = all.filter(id => (rehabEx(id).provokes || []).includes('hip-adduction'));
+  assert(!offenders.length, 'the hip track never selects a compressive (adduction) exercise' + (offenders.length ? ' — ' + offenders.join(',') : ''));
+}
+
+{
+  const t = rbTrack('calf-insert', 'calf');
+  const bad = [];
+  for (const ph of [1, 2, 3]) {
+    for (const id of REHAB_CHAINS['calf']) {
+      if (rehabExOK(rehabEx(id), t, ph) && (rehabEx(id).provokes || []).includes('ankle-dorsiflexion-load')) bad.push(id + '@' + ph);
+    }
+  }
+  assert(!bad.length, 'insertional achilles stays off the step until the final phase' + (bad.length ? ' — ' + bad.join(',') : ''));
+}
+
+{
+  const t = rbTrack('back-general', 'back');
+  t.dirBias = 'ext';
+  const flexOK = REHAB_CHAINS['back-direction'].filter(id =>
+    rehabExOK(rehabEx(id), t, 1) && (rehabEx(id).provokes || []).includes('spinal-flexion-loaded'));
+  assert(!flexOK.length, 'an extension direction preference biases flexion work out of phase 1');
+}
+
+// --- week-over-week escalation is a red ---
+{
+  const t = rbTrack('pfp', 'knee');
+  const mk = (daysAgo, v) => ({ date: new Date(Date.now() - daysAgo * 864e5).toISOString(), nextDay: 'same', amPain: v });
+  t.checks = [mk(13, 2), mk(11, 2), mk(9, 2), mk(5, 5), mk(3, 5), mk(1, 6)];
+  assert(weeklyTrendRising(t), 'morning pain climbing week over week is detected');
+  t.sessions.push({ date: new Date(Date.now() - 864e5).toISOString(), duringPain: 3, phase: 1, cls: null });
+  assert(classifySession(lastSession(t), checkForSession(t, lastSession(t)), t) === 'red',
+    'a rising weekly trend is red even when the single session looked fine');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  const mk = (daysAgo, v) => ({ date: new Date(Date.now() - daysAgo * 864e5).toISOString(), nextDay: 'same', amPain: v });
+  t.checks = [mk(13, 3), mk(11, 3), mk(9, 3), mk(5, 3), mk(3, 2), mk(1, 2)];
+  assert(!weeklyTrendRising(t), 'a flat or falling trend is not flagged');
+  t.checks = [mk(5, 2), mk(3, 6)];
+  assert(!weeklyTrendRising(t), 'two data points is not enough to call a trend');
+}
+
+// --- bail-outs ---
+{
+  const t = rbTrack('pfp', 'knee');
+  t.sessions = [1, 2, 3, 4].map((n, i) => ({ date: new Date(Date.now() - (4 - i) * 864e5).toISOString(),
+    duringPain: 7, phase: 1, cls: i === 0 ? 'green' : 'red' }));
+  const al = rehabAlert(t);
+  assert(al && al.kind === 'stalling', 'three reds in four sessions raises the "not settling" card');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  t.startedAt = new Date(Date.now() - 45 * 864e5).toISOString();   // ~week 7
+  t.baseline = { worst: 6, typical: 6, psfs: [] };
+  const al = rehabAlert(t);
+  assert(al && al.kind === 'six-weeks', 'six weeks with no change tells you to see someone (' + (al && al.kind) + ')');
+}
+
+{
+  const t = rbTrack('pfp', 'knee');
+  t.startedAt = new Date(Date.now() - 45 * 864e5).toISOString();
+  t.baseline = { worst: 6, typical: 6, psfs: [] };
+  t.checks = [0, 1, 2].map(n => ({ date: new Date(Date.now() - n * 864e5).toISOString(), nextDay: 'better', amPain: 2 }));
+  assert(improvedMeaningfully(t), 'a 4-point drop in morning pain counts as improvement');
+  assert(!rehabAlert(t) || rehabAlert(t).kind !== 'six-weeks', 'no six-week nag when it is clearly working');
+}
+
+{
+  const t = rbTrack('back-leg', 'back');
+  t.checks = [
+    { date: new Date(Date.now() - 12 * 864e5).toISOString(), nextDay: 'same', amPain: 4, leg: 'thigh' },
+    { date: new Date(Date.now() - 8 * 864e5).toISOString(), nextDay: 'same', amPain: 4, leg: 'calf' },
+    { date: new Date(Date.now() - 2 * 864e5).toISOString(), nextDay: 'same', amPain: 4, leg: 'foot' },
+  ];
+  const al = rehabAlert(t);
+  assert(al && al.kind === 'peripheralising', 'symptoms travelling further down the leg stops the loading');
+}
+
+// --- graduation hands exercises back to normal training ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  const t = rbTrack('pfp', 'knee');
+  t.rung['knee-quad'] = REHAB_CHAINS['knee-quad'].length - 1;
+  t.status = 'graduated';
+  S.rehab.tracks.push(t);
+  const ids = graduatedIds(t);
+  assert(ids.includes('rh-step-down'), 'graduating hands back the top rung reached');
+  assert(graduatedIdSet().has('rh-step-down'), 'graduated ids are collected across tracks');
+  let seen = false;
+  for (let i = 0; i < 120 && !seen; i++) {
+    if (generateWorkout(['legs'], 60).ex.some(e => e.id === 'rh-step-down')) seen = true;
+  }
+  assert(seen, 'a graduated exercise can now appear in a normal plan');
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+}
+
+// --- one active track at a time ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  S.rehab.tracks.push(rbTrack('pfp', 'knee'));
+  S.rehab.tracks.push(Object.assign(rbTrack('rcrsp', 'shoulder'), { status: 'paused' }));
+  assert(activeTrack().region === 'knee', 'only the active track is returned');
+  assert(S.rehab.tracks.filter(x => x.status === 'active').length === 1, 'exactly one block runs at a time');
+}
+
+// --- niggles ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  assert(!niggleSuggestion(), 'no suggestion with no niggles');
+  for (let i = 0; i < 3; i++) logNiggle('bb-squat', 'knee', 'left');
+  assert(!niggleSuggestion(), 'three flags is not enough to offer a block');
+  logNiggle('bb-squat', 'knee', 'left');
+  const s = niggleSuggestion();
+  assert(s && s.region === 'knee' && s.side === 'left' && s.n === 4, 'four flags in three weeks earns the offer');
+  S.rehab.dismissed = s.key;
+  assert(!niggleSuggestion(), 'dismissing the offer keeps it dismissed');
+  S.rehab.dismissed = null;
+  S.rehab.niggles.forEach(n => { n.date = new Date(Date.now() - 40 * 864e5).toISOString(); });
+  assert(!niggleSuggestion(), 'old niggles age out of the three-week window');
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+}
+
+// --- outcome measures ---
+{
+  const t = rbTrack('pfp', 'knee');
+  t.baseline = { worst: 7, typical: 5, psfs: [{ task: 'stairs', score: 3 }, { task: 'sitting', score: 4 }] };
+  assert(psfsDue(t) === false || psfsDue(t) === true, 'psfsDue returns a boolean');
+  t.startedAt = new Date(Date.now() - 20 * 864e5).toISOString();
+  assert(psfsDue(t), 'PSFS comes back round after two weeks');
+  t.psfsLog = [{ date: todayISO(), scores: [7, 8] }];
+  assert(!psfsDue(t), 'and not again straight away');
+  const d = psfsDelta(t);
+  assert(d && Math.abs(d.delta - 4) < 0.001, 'PSFS delta measured against intake (' + (d && d.delta) + ')');
+}
+
+// --- a full Rebuild session runs through the normal workout machinery ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  const t = createTrack('knee', 'left', 'pfp', {}, { worst: 6, typical: 4, psfs: [] }, null);
+  S.rehab.tracks.push(t);
+  S.draft = buildRehabSession(t);
+  assert(S.draft.rehab === t.id, 'the draft carries its track id');
+  const histBefore = S.history.length;
+  startWorkout();
+  assert(S.active && S.active.rehab === t.id, 'the active session knows it is a Rebuild session');
+  assert(S.active.ex.every(e => e.suggest), 'rehab exercises get a prescription, not suggestFor()');
+  S.active.ex.forEach(e => e.log.forEach(s => { s.done = true; s.r = e.reps[1]; }));
+  S.active.duringPain = 3;
+  S.active.startedAt = Date.now() - 25 * 60000;
+  finishWorkout(true);
+  assert(S.history.length === histBefore + 1, 'a Rebuild session lands in history');
+  assert(S.history[0].rehab === t.id, 'the history entry is tagged with the track');
+  assert(t.sessions.length === 1, 'and is recorded on the track');
+  assert(t.sessions[0].duringPain === 3, 'with the during-session pain score');
+  S.active = null;
+}
+
+// --- views render for every pattern ---
+{
+  let bad = [];
+  for (const key of Object.keys(REHAB_PATTERNS)) {
+    const pat = REHAB_PATTERNS[key];
+    S.rehab = { tracks: [], niggles: [], dismissed: null };
+    const t = rbTrack(key, pat.region);
+    S.rehab.tracks.push(t);
+    try {
+      const h = viewRehab();
+      if (!h || h.indexOf('Rebuild') < 0) bad.push(key + ': hub');
+      if (!viewToday()) bad.push(key + ': today');
+      rbSession(t, 3, null);
+      t.sessions[0].date = new Date(Date.now() - 12 * 3600e3).toISOString();
+      if (!rehabCheckCard()) bad.push(key + ': morning check card');
+      S._rehabCheck = { nextDay: 'same' };
+      if (!rehabCheckCard()) bad.push(key + ': morning check stage 2');
+      S._rehabCheck = null;
+    } catch (e) { bad.push(key + ': threw ' + e.message); }
+  }
+  assert(!bad.length, 'every pattern renders its screens' + (bad.length ? ' — ' + bad.join('; ') : ''));
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+}
+
+{
+  let bad = [];
+  for (const r of REHAB_REGIONS) {
+    S._rehabWiz = { i: 0, region: r.id, side: 'left', flags: [], flagsSeen: true, answers: {}, selfTest: null,
+      baseline: { worst: 5, typical: 3, psfs: [{ task: '', score: null }, { task: '', score: null }, { task: '', score: null }] } };
+    const steps = wizSteps();
+    for (let i = 0; i < steps.length; i++) {
+      S._rehabWiz.i = i;
+      try { if (!viewRehabSetup()) bad.push(r.id + ' step ' + i + ': empty'); }
+      catch (e) { bad.push(r.id + ' step ' + i + ': ' + e.message); }
+    }
+  }
+  assert(!bad.length, 'the intake wizard renders every step for every region' + (bad.length ? ' — ' + bad.join('; ') : ''));
+  S._rehabWiz = null;
+}
+
+
+// --- preview / workout / profile render for a Rebuild session ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  const t = createTrack('shoulder', 'right', 'rcrsp', {}, { worst: 5, typical: 3, psfs: [{ task: 'reaching a shelf', score: 4 }] }, null);
+  S.rehab.tracks.push(t);
+  S.draft = buildRehabSession(t);
+  const prev = viewPreview();
+  assert(prev.indexOf('Right shoulder') >= 0, 'the preview names the track, not the muscle groups');
+  assert(prev.indexOf('data-a="regen"') < 0, 'the preview hides Reshuffle for a Rebuild session');
+  assert(prev.indexOf('data-a="swap"') < 0, 'the preview hides per-exercise swap for a Rebuild session');
+  startWorkout();
+  const w = viewWorkout();
+  assert(w.indexOf('Rebuild · week') >= 0, 'the session screen says it is a Rebuild session');
+  assert(w.indexOf('data-a="open-picker"') < 0, 'you cannot bolt extra exercises onto a Rebuild session');
+  assert(w.indexOf('data-a="niggle"') >= 0, 'the niggle button is on every exercise card');
+  S._rehabPain = true;
+  assert(viewWorkout().indexOf('data-a="rehab-pain"') >= 0, 'finishing asks for a during-session pain score');
+  S._rehabPain = null;
+  S._niggle = { exId: 'rh-band-er', region: null };
+  assert(viewWorkout().indexOf('data-a="niggle-region"') >= 0, 'the niggle sheet opens');
+  S._niggle = null;
+  assert(viewProfile().indexOf('Rebuild') >= 0, 'Profile lists Rebuild blocks');
+  S.active = null; S.draft = null;
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+}
+
+// --- a paused track stops suggesting, and Today stays clean without one ---
+{
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+  assert(rehabCard() === '', 'no Rebuild card on Today without an active block');
+  assert(rehabCheckCard() === '', 'no morning check without a block');
+  const t = createTrack('knee', 'left', 'pfp', {}, { worst: 5, typical: 3, psfs: [] }, null);
+  S.rehab.tracks.push(t);
+  assert(rehabCard() !== '', 'an active block shows its card');
+  t.status = 'paused';
+  assert(rehabCard() === '', 'a paused block goes quiet');
+  S.rehab = { tracks: [], niggles: [], dismissed: null };
+}
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');
