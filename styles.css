@@ -541,12 +541,24 @@ h2 { font-size: 17px; }
   color: var(--on-ink);
   border-radius: var(--radius);
   overflow: hidden;
-  transform: translateY(150%);
-  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  /* Travel its own height *plus* the gap it sits above the bottom edge — a
+     flat 150% left a cream sliver parked on the screen. Visibility hides it
+     outright so the drop shadow can't bleed either. */
+  transform: translateY(calc(100% + 14px + env(safe-area-inset-bottom)));
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.2s ease, visibility 0s linear 0.3s;
   z-index: 50;
   box-shadow: 0 8px 28px rgba(20, 17, 12, 0.35);
 }
-.restbar.show { transform: none; }
+.restbar.show {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.2s ease, visibility 0s;
+}
 .restbar .rest-fill {
   position: absolute; top: 0; bottom: 0; left: 0;
   background: rgba(255, 255, 255, 0.09);

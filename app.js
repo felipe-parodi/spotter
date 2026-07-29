@@ -4135,13 +4135,27 @@ if ('serviceWorker' in navigator) {
       });
     });
   }).catch(() => { /* e.g. plain-HTTP LAN preview — app still works, just no offline cache */ });
+
+  /* Ask the worker to stock the demo photos, once the app itself is up. The
+     worker can't reliably start this on its own: it takes control only after
+     the page's requests are already done, so on a fresh install nothing would
+     wake it. Doing it from here also keeps the download behind the shell
+     instead of racing it. */
+  const syncPhotos = () => {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'SYNC_IMAGES' });
+    }
+  };
+  if (document.readyState === 'complete') syncPhotos();
+  else window.addEventListener('load', syncPhotos);
+
   // Reload when an accepted update takes over — but NOT on the very first
   // install, where claim() also fires controllerchange and a reload would
   // wipe in-progress onboarding input.
   let hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!hadController) { hadController = true; return; }
+    if (!hadController) { hadController = true; syncPhotos(); return; }
     if (reloaded) return; reloaded = true; location.reload();
   });
 }

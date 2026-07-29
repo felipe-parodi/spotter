@@ -11,7 +11,7 @@
 
 importScripts('./precache-manifest.js');
 
-const VERSION = 'v3.8.0';
+const VERSION = 'v3.8.1';
 const SHELL_CACHE = 'spotter-shell-' + VERSION;
 const IMG_CACHE = 'spotter-img-v1';
 
@@ -37,12 +37,20 @@ self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL_CACHE).then(c => c.addAll(SHELL_ASSETS)));
 });
 
-/* Fetch any not-yet-cached photos, a few at a time; tolerate failures
-   (they'll be retried lazily by the fetch handler). */
-async function fillImageCache() {
+/* Bring the photo cache in line with the manifest: drop what was removed,
+   fetch what's missing a few at a time. Failures are tolerated — the fetch
+   handler caches those lazily the first time they're shown, and the next
+   worker boot retries. One key enumeration serves both halves, so the common
+   case (nothing changed) is a single cache read. */
+async function syncImageCache() {
   const c = await caches.open(IMG_CACHE);
-  const cached = new Set((await c.keys()).map(r => new URL(r.url).pathname));
-  const missing = IMGS.filter(u => !cached.has(new URL(u, location.href).pathname));
+  const keys = await c.keys();
+  const want = new Set(IMGS.map(u => new URL(u, location.href).pathname));
+  for (const req of keys) {
+    if (!want.has(new URL(req.url).pathname)) await c.delete(req);
+  }
+  const have = new Set(keys.map(r => new URL(r.url).pathname));
+  const missing = IMGS.filter(u => !have.has(new URL(u, location.href).pathname));
   const BATCH = 6;
   for (let i = 0; i < missing.length; i += BATCH) {
     await Promise.all(missing.slice(i, i + BATCH).map(u =>
@@ -51,13 +59,13 @@ async function fillImageCache() {
   }
 }
 
-/* Drop photos that are no longer in the manifest. */
-async function pruneImageCache() {
-  const c = await caches.open(IMG_CACHE);
-  const want = new Set(IMGS.map(u => new URL(u, location.href).pathname));
-  for (const req of await c.keys()) {
-    if (!want.has(new URL(req.url).pathname)) await c.delete(req);
-  }
+/* Runs once per worker boot, and only when the page asks — see the message
+   handler. A worker killed mid-sync just picks up where it left off next boot,
+   since the cache itself is the progress record. */
+let imageSync = null;
+function startImageSync() {
+  if (!imageSync) imageSync = syncImageCache().catch(() => {});
+  return imageSync;
 }
 
 /* Drop caches from older versions. Runs last in activate — deleting while
@@ -70,34 +78,52 @@ async function dropOldCaches() {
     .map(k => caches.delete(k)));
 }
 
+/* Only cheap bookkeeping blocks activation. A worker stays in "activating"
+   until this promise settles and every fetch queues behind it — including the
+   reload the page performs on controllerchange. Syncing the photos here meant
+   a deploy that added 40 of them made the next open wait on ~600 KB of
+   downloads before index.html was served. */
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     await self.clients.claim();
-    await pruneImageCache();
-    await fillImageCache();
     await dropOldCaches();
   })());
 });
 
 self.addEventListener('message', e => {
-  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (!e.data) return;
+  if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
+  /* The page asks for the photo sync once it has finished loading. This is the
+     trigger that matters on a fresh install: claim() takes control only after
+     the page's own requests are done, so no fetch event would fire to start it.
+     waitUntil here keeps the worker alive for the download without ever
+     standing between the app and its shell. */
+  if (e.data.type === 'SYNC_IMAGES') e.waitUntil(startImageSync());
 });
 
+/* Cache-first, looking only in the cache that could hold the request —
+   a bare caches.match() searches every cache in the origin, and the photo
+   cache is 240-odd entries deep. Cross-origin GETs skip the worker entirely
+   rather than round-tripping through it. */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
-  const isImg = new URL(e.request.url).pathname.includes('/img/');
-  e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then(hit =>
-      hit ||
-      fetch(e.request).then(res => {
-        if (res.ok && new URL(e.request.url).origin === location.origin) {
-          const copy = res.clone();
-          caches.open(isImg ? IMG_CACHE : SHELL_CACHE).then(c => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() =>
-        e.request.mode === 'navigate' ? caches.match('./index.html') : Response.error()
-      )
-    )
-  );
+  const url = new URL(e.request.url);
+  if (url.origin !== location.origin) return;
+  const cacheName = url.pathname.includes('/img/') ? IMG_CACHE : SHELL_CACHE;
+  e.respondWith((async () => {
+    const cache = await caches.open(cacheName);
+    const hit = await cache.match(e.request, { ignoreSearch: true });
+    if (hit) return hit;
+    try {
+      const res = await fetch(e.request);
+      if (res.ok) cache.put(e.request, res.clone());
+      return res;
+    } catch (err) {
+      if (e.request.mode === 'navigate') {
+        const shell = await caches.open(SHELL_CACHE);
+        return (await shell.match('./index.html')) || Response.error();
+      }
+      return Response.error();
+    }
+  })());
 });
