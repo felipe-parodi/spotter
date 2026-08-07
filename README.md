@@ -73,6 +73,15 @@ after install — each phone keeps its own profile and history.
   refreshed weights; weekly streak plus a **daily streak** that tolerates up to
   two rest days; **sets-per-muscle-group bars for the current week** in Trends;
   JSON backup export/import. Screen stays awake during a session.
+- **Test Day** — a guided, ~10-minute battery of longevity benchmarks
+  (grip strength per hand, max push-ups, eyes-closed one-leg balance,
+  30-second chair stands, max plank; monthly adds: sitting-rising test,
+  sit-and-reach, waist-to-height, VO₂max log; quarterly: optional Cooper
+  12-minute run). A Today card nudges when the biweekly core is due; each
+  test runs on its own screen with built-in stopwatch/countdown and beeps.
+  Results live in Trends → Test Day with per-test trend lines and
+  evidence-based reference marks (40 push-ups, sitting-rising ≥ 8,
+  waist-to-height < 0.5) — references, never pass/fail gates.
 
 Demo photos are from the public-domain
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (Unlicense).

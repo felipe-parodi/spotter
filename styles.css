@@ -905,6 +905,22 @@ h2 { font-size: 17px; }
 .hiit.hard .hiit-bar { background: var(--accent-soft); }
 .hiit .btn-danger { align-self: stretch; }
 
+/* ---------------- Test Day runner ---------------- */
+
+.testday-run .test-name { font-size: 32px; }
+.testday-run .test-cue { max-width: 34ch; }
+.test-time {
+  font-family: var(--serif);
+  font-size: 72px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.test-time.dim { opacity: 0.35; }
+.test-entry { width: 100%; }
+.th-ok { color: var(--accent); font-weight: 700; }
+
 /* ---------------- cool-down & review ---------------- */
 
 .stretch-go {

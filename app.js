@@ -19,6 +19,7 @@ function defaultState() {
     custom: [],    // user-created exercises
     notes: {},     // per-exercise notes: {exId: 'seat height 4'}
     bodyLog: [],   // bodyweight entries: {date: ISO, w: number}
+    tests: [],     // Test Day runs, newest first: {date: ISO, results: {testId: number}}
     active: null,  // in-progress workout
     draft: null,   // generated-but-not-started plan
     sel: { groups: ['full'], minutes: 45 },
@@ -57,6 +58,7 @@ function loadState() {
       s.rehab.tracks = s.rehab.tracks || [];
       s.rehab.niggles = s.rehab.niggles || [];
       s.bodyLog = parsed.bodyLog || [];
+      s.tests = parsed.tests || [];
       delete s.lastSummary; // older versions persisted a copy of history[0]
       // seed the log from an existing single bodyweight so the trend has a start point
       if (!s.bodyLog.length && s.profile && s.profile.bodyweight > 0) {
@@ -1407,6 +1409,7 @@ setInterval(() => {
     if (el) el.textContent = groupLabels(S.active.groups) + ' · started ' + minutesBetween(S.active.startedAt, Date.now()) + ' min ago';
   }
   hiitTick();
+  testTick();
   if (!rest) return;
   const left = Math.ceil((rest.end - Date.now()) / 1000);
   if (left <= 0) {
@@ -1575,6 +1578,326 @@ function viewHiit() {
     </div>
     <button class="btn-danger" data-a="hiit-end">End block early</button>
   </div>`;
+}
+
+/* ---------------- Test Day ----------------
+   Guided longevity benchmark battery (definitions in db.js TESTS). Results
+   land in S.tests[] as {date, results:{testId: value}} and ride the normal
+   JSON backup. The run itself is transient, like a HIIT block: killing the
+   app mid-battery loses the run, never the log. */
+
+const TEST_CADENCE_DAYS = { biweekly: 13, monthly: 27, quarterly: 83 };
+
+let testRun = null;   // {list: [testId], i, results: {}}
+let testTimer = null; // {mode: 'stop'|'count', start, done, lastBlip}
+
+function testById(id) { return TESTS.find(t => t.id === id); }
+
+/* Most recent recorded value for one test — skipped runs don't count. */
+function lastTestResult(id) {
+  for (const run of S.tests) if (run.results && run.results[id] != null) return { date: run.date, val: run.results[id] };
+  return null;
+}
+
+/* Oldest-first {date, val} series for the chart helpers. */
+function testSeries(id) {
+  return S.tests.slice().reverse()
+    .filter(r => r.results && r.results[id] != null)
+    .map(r => ({ date: r.date, val: r.results[id] }));
+}
+
+/* Which tests would join a run started now — each rides its own cadence,
+   so a skipped test comes straight back next battery. */
+function dueTests(now) {
+  now = now || Date.now();
+  return TESTS.filter(t => {
+    const last = lastTestResult(t.id);
+    return !last || now - new Date(last.date).getTime() >= TEST_CADENCE_DAYS[t.cadence] * DAY_MS;
+  });
+}
+
+/* The Today card fires when the biweekly core comes due again. */
+function testDayDue(now) {
+  now = now || Date.now();
+  const lastRun = S.tests[0];
+  if (lastRun && now - new Date(lastRun.date).getTime() < TEST_CADENCE_DAYS.biweekly * DAY_MS) return false;
+  return dueTests(now).length > 0;
+}
+
+function startTestDay() {
+  let list = dueTests();
+  if (!list.length) list = TESTS.filter(t => t.cadence === 'biweekly'); // manual retest anytime
+  ensureAudio();
+  testTimer = null;
+  testRun = { list: list.map(t => t.id), i: 0, results: {} };
+  go('testday');
+}
+
+function currentTest() { return testRun ? testById(testRun.list[testRun.i]) : null; }
+
+function recordTestResult(val) {
+  if (!testRun || !currentTest()) return;
+  testRun.results[currentTest().id] = val;
+  advanceTest();
+}
+
+function advanceTest() {
+  testTimer = null;
+  testRun.i++;
+  if (testRun.i >= testRun.list.length) { finishTestDay(); return; }
+  render(); window.scrollTo(0, 0);
+}
+
+function finishTestDay() {
+  const results = testRun ? testRun.results : {};
+  testRun = null; testTimer = null;
+  if (!Object.keys(results).length) { toast('Nothing recorded — no run saved.'); go('today'); return; }
+  S.tests.unshift({ date: todayISO(), results });
+  saveNow();
+  go('test-summary');
+}
+
+function startTestTimerRun() {
+  const t = currentTest();
+  if (!t) return;
+  ensureAudio();
+  testTimer = { mode: t.kind === 'countdown' ? 'count' : 'stop', start: Date.now(), done: null, lastBlip: null };
+  blip();
+  render();
+}
+
+function stopTestStopwatch() {
+  const t = currentTest();
+  if (!t || !testTimer || testTimer.mode !== 'stop' || testTimer.done != null) return;
+  let secs = (Date.now() - testTimer.start) / 1000;
+  if (t.cap) secs = Math.min(secs, t.cap);
+  testTimer.done = Math.round(secs * 10) / 10;
+  render();
+}
+
+/* Driven from the global 250 ms interval, same as the HIIT runner. */
+function testTick() {
+  if (!testTimer || testTimer.done != null || route !== 'testday') return;
+  const t = currentTest();
+  if (!t) { testTimer = null; return; }
+  const el = $('#tt-time');
+  const elapsed = (Date.now() - testTimer.start) / 1000;
+  if (testTimer.mode === 'stop') {
+    if (t.cap && elapsed >= t.cap) { testTimer.done = t.cap; beep(); render(); return; }
+    if (el) el.textContent = fmtClock(Math.floor(elapsed));
+  } else {
+    const left = Math.ceil(t.cap - elapsed);
+    if (left <= 0) { testTimer.done = t.cap; beep(); render(); return; }
+    if (left <= 3 && testTimer.lastBlip !== left) { testTimer.lastBlip = left; blip(); }
+    if (el) el.textContent = fmtClock(left);
+  }
+}
+
+function fmtTestNum(t, v) { return String(t.decimals ? Math.round(v * 10) / 10 : Math.round(v)); }
+function fmtTestVal(t, v) { return fmtTestNum(t, v) + ' ' + t.unit; }
+
+function testEntryHTML(t) {
+  const heightAsk = t.id === 'waist' && !(S.profile && S.profile.heightCm > 0);
+  return `
+    ${heightAsk ? `<label class="field" style="width:100%"><span>Your height (cm) — asked once, for waist-to-height</span>
+      <input type="number" inputmode="decimal" id="test-height" placeholder="e.g. 175" min="100" max="230"></label>` : ''}
+    <div class="bw-entry test-entry">
+      <input type="number" inputmode="decimal" id="test-val" placeholder="—"
+        ${t.min != null ? 'min="' + t.min + '"' : ''} ${t.max != null ? 'max="' + t.max + '"' : ''}
+        step="${t.decimals ? '0.1' : '1'}">
+      <span class="bw-unit">${esc(t.unit)}</span>
+      <button class="btn-primary" data-a="test-save">Save</button>
+    </div>`;
+}
+
+function viewTestDay() {
+  if (!testRun || !currentTest()) { route = 'today'; return viewToday(); }
+  const t = currentTest();
+  const last = lastTestResult(t.id);
+  const lastLine = last ? '<p class="muted small">Last time: <strong>' + fmtTestVal(t, last.val) + '</strong> · ' + fmtDate(last.date) + '</p>' : '';
+  let body;
+  if (t.kind === 'number') {
+    body = testEntryHTML(t);
+  } else if (testTimer && testTimer.done != null) {
+    body = t.kind === 'countdown' ? `
+      <div class="test-time">0:00</div>
+      <p class="muted">Time! How many full stands?</p>
+      ${testEntryHTML(t)}` : `
+      <div class="test-time">${fmtClock(Math.round(testTimer.done))}</div>
+      <p class="muted">${fmtTestVal(t, testTimer.done)}${t.cap && testTimer.done >= t.cap ? ' — capped out, nice' : ''}</p>
+      <div class="row-btns" style="width:100%">
+        <button class="btn-ghost" data-a="test-redo">Redo</button>
+        <button class="btn-primary" data-a="test-use">Use ${fmtTestVal(t, testTimer.done)}</button>
+      </div>`;
+  } else if (testTimer) {
+    body = `
+      <div class="test-time" id="tt-time">${t.kind === 'countdown' ? fmtClock(t.cap) : '0:00'}</div>
+      ${t.kind === 'countdown'
+        ? '<p class="muted">Go — keep standing until the beep.</p><button class="btn-ghost" data-a="test-redo">Reset</button>'
+        : '<button class="btn-primary big" data-a="test-stop">Stop</button>'}`;
+  } else {
+    body = `
+      <div class="test-time dim">${t.kind === 'countdown' ? fmtClock(t.cap) : '0:00'}</div>
+      <button class="btn-primary big" data-a="test-go">${t.kind === 'countdown' ? 'Start the ' + t.cap + ' seconds' : 'Start timer'}</button>`;
+  }
+  return `
+  <div class="screen center testday-run">
+    <div class="kicker">Test Day · ${testRun.i + 1} of ${testRun.list.length}</div>
+    <h1 class="test-name">${esc(t.name)}</h1>
+    <p class="muted small test-cue">${esc(t.cue)}</p>
+    ${lastLine}
+    ${body}
+    <details class="howto"><summary>Why this test</summary><p class="muted small" style="margin-top:8px">${esc(t.why)}</p></details>
+    <div class="row-btns" style="width:100%">
+      <button class="btn-ghost" data-a="test-skip">Skip this one</button>
+      <button class="btn-ghost" data-a="test-quit">End Test Day</button>
+    </div>
+  </div>`;
+}
+
+function viewTestSummary() {
+  const run = S.tests[0];
+  if (!run) { route = 'today'; return viewToday(); }
+  const rows = TESTS.filter(t => run.results[t.id] != null).map(t => {
+    const v = run.results[t.id];
+    const series = testSeries(t.id);
+    const prev = series.length >= 2 ? series[series.length - 2] : null;
+    let delta = '';
+    if (prev) {
+      const d = Math.round((v - prev.val) * 10) / 10;
+      delta = d === 0 ? ' <span class="trend-delta">steady</span>'
+        : ' <span class="trend-delta ' + (d > 0 ? 'up' : 'down') + '">' + (d > 0 ? '↑ +' : '↓ −') + Math.abs(d) + '</span>';
+    }
+    const th = t.threshold && v >= t.threshold.val ? ' <span class="th-ok">✓</span>' : '';
+    return '<div class="hist-ex"><span>' + esc(t.name) + th + '</span><span><strong>' + fmtTestVal(t, v) + '</strong>' + delta + '</span></div>';
+  }).join('');
+  return `
+  <div class="screen">
+    <header class="top"><div><div class="kicker">Test Day · ${fmtDate(run.date)}</div><h1>Logged ✓</h1></div></header>
+    <section class="card">
+      <div class="hist-detail" style="border:none;padding-top:2px">${rows}</div>
+    </section>
+    ${whtrCard()}
+    <p class="fine">Every result feeds its own trend — Trends → Test Day. The core battery comes due again in two weeks.</p>
+    <button class="btn-primary big" data-a="nav" data-r="today">Done</button>
+  </div>`;
+}
+
+function whtrCard() {
+  const w = lastTestResult('waist');
+  const h = S.profile && S.profile.heightCm;
+  if (!w || !(h > 0)) return '';
+  const r = w.val / h;
+  return '<section class="card"><h2>Waist-to-height</h2><p class="muted small"><strong>' + r.toFixed(2) +
+    '</strong> · target under 0.50' + (r < 0.5 ? ' — you’re there ✓' : ' — the trend matters more than any one tape reading') + '</p></section>';
+}
+
+function viewTests() {
+  const lastRun = S.tests[0];
+  const nextIn = lastRun ? Math.max(1, Math.ceil((new Date(lastRun.date).getTime() + 14 * DAY_MS - Date.now()) / DAY_MS)) : 0;
+  const intro = lastRun
+    ? 'Last battery ' + fmtDate(lastRun.date) + (testDayDue() ? ' — a retest is due.' : ' — core battery due again in ~' + nextIn + ' day' + (nextIn === 1 ? '' : 's') + '.')
+    : 'A ~10-minute battery of the best-evidenced fitness benchmarks. Run it every two weeks and watch the trends, not any single number. You’ll want a grip dynamometer (~$25) and a sturdy chair.';
+  const rows = TESTS.map(t => {
+    const series = testSeries(t.id);
+    const latest = series[series.length - 1];
+    const th = t.threshold && latest ? (latest.val >= t.threshold.val ? ' · ✓' : '') : '';
+    return `
+    <button class="card trend-row" data-a="open-test" data-id="${esc(t.id)}">
+      <div class="trend-main">
+        <strong>${esc(t.name)}</strong>
+        <span class="muted small">${latest ? fmtTestVal(t, latest.val) + th + ' · ' + fmtDate(latest.date) : 'No result yet · ' + t.cadence}</span>
+      </div>
+      ${sparkSVG(series.map(p => p.val)) || '<span class="chev">›</span>'}
+    </button>`;
+  }).join('');
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="trends">‹</button>
+      <div><div class="kicker">Longevity benchmarks</div><h1>Test Day</h1></div>
+    </header>
+    <section class="card">
+      <p class="muted small">${intro}</p>
+      <button class="btn-primary" data-a="test-start">${lastRun ? 'Start a battery' : 'Set your baseline'}</button>
+    </section>
+    ${whtrCard()}
+    ${rows}
+  </div>
+  ${tabbar('trends')}`;
+}
+
+function viewTestTrend() {
+  const t = testById(S._trendTest);
+  if (!t) { route = 'tests'; return viewTests(); }
+  const series = testSeries(t.id);
+  const latest = series[series.length - 1];
+  const best = series.length ? series.reduce((m, p) => p.val > m.val ? p : m, series[0]) : null;
+  const change = series.length >= 2 ? latest.val - series[0].val : null;
+  const recent = series.slice(-8).reverse().map(p =>
+    '<div class="hist-ex"><span class="muted">' + fmtDate(p.date) + '</span><span>' + fmtTestVal(t, p.val) + '</span></div>').join('');
+  return `
+  <div class="screen">
+    <header class="top">
+      <button class="back" data-a="nav" data-r="tests">‹</button>
+      <div><div class="kicker">Benchmark</div><h1>${esc(t.name)}</h1></div>
+    </header>
+    <section class="card chart-card">
+      <div class="chart-cap"><span class="muted small">${esc(t.name)} (${esc(t.unit)})</span></div>
+      ${bigChartSVG(series)}
+    </section>
+    <div class="stats-row">
+      <div class="stat"><strong>${best ? fmtTestNum(t, best.val) : '—'}</strong><span>best</span></div>
+      <div class="stat"><strong>${latest ? fmtTestNum(t, latest.val) : '—'}</strong><span>latest</span></div>
+      <div class="stat"><strong>${change == null ? '—' : (change > 0 ? '+' : '') + fmtTestNum(t, change)}</strong><span>change</span></div>
+    </div>
+    ${t.threshold ? '<p class="fine">Reference: ' + esc(t.threshold.label) + '</p>' : ''}
+    <section class="card"><h2>Why it matters</h2><p class="muted small">${esc(t.why)}</p></section>
+    ${recent ? '<section class="card"><h2>History</h2><div class="hist-detail" style="border:none;padding-top:2px">' + recent + '</div></section>' : ''}
+  </div>
+  ${tabbar('trends')}`;
+}
+
+/* Today-screen nudge, styled like the backup card. */
+function testDayCard() {
+  if (S.active || S._snoozeTest || !testDayDue()) return '';
+  const due = dueTests();
+  const first = !S.tests.length;
+  const extras = due.filter(t => t.cadence !== 'biweekly').length;
+  return `
+    <section class="card backup">
+      <div class="backup-txt">
+        <strong>${first ? 'Set your baseline — Test Day' : 'Test Day is due'}</strong>
+        <span class="muted small">${first
+          ? 'A ~10-minute battery of longevity benchmarks: grip, push-ups, balance, chair stands, plank. Grab your grip dynamometer and a chair.'
+          : due.length + ' tests on the slate' + (extras ? ' (' + extras + ' monthly join' + (extras === 1 ? 's' : '') + ' in)' : '') + ' · about 10 minutes'}</span>
+      </div>
+      <div class="row-btns">
+        <button class="btn-ghost" data-a="test-snooze">Not today</button>
+        <button class="btn-primary" data-a="test-start">Start</button>
+      </div>
+    </section>`;
+}
+
+/* Trends-screen entry row. */
+function testsRow() {
+  const last = S.tests[0];
+  let sub = 'Grip, push-ups, balance, chair stands, plank — every two weeks';
+  if (last) {
+    const parts = [];
+    if (last.results.pushups != null) parts.push(last.results.pushups + ' push-ups');
+    const g = Math.max(last.results['grip-l'] || 0, last.results['grip-r'] || 0);
+    if (g) parts.push('grip ' + fmtTestNum(testById('grip-l'), g) + ' kg');
+    sub = (parts.length ? parts.join(' · ') + ' · ' : '') + fmtDate(last.date) + (testDayDue() ? ' · due again' : '');
+  }
+  return `
+    <button class="card trend-row" data-a="nav" data-r="tests">
+      <div class="trend-main">
+        <strong>Test Day</strong>
+        <span class="muted small">${esc(sub)}</span>
+      </div>
+      <span class="chev">›</span>
+    </button>`;
 }
 
 /* ---------------- toast ---------------- */
@@ -1760,6 +2083,8 @@ function render() {
     trends: viewTrends, trend: viewTrend, bw: viewBodyweight, profile: viewProfile,
     cooldown: viewCooldown, review: viewReview, hiit: viewHiit,
     rehab: viewRehab, 'rehab-setup': viewRehabSetup,
+    testday: viewTestDay, 'test-summary': viewTestSummary,
+    tests: viewTests, 'test-trend': viewTestTrend,
   };
   app.innerHTML = (views[route] || viewToday)();
 }
@@ -1771,7 +2096,7 @@ function tabbar(current) {
     ['trends', 'Trends', '<svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-8v4h2V4h-8v2h4l-6.5 6.5-4-4L2 15.5z"/></svg>'],
     ['profile', 'Profile', '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5z"/></svg>'],
   ];
-  const map = { trend: 'trends', bw: 'trends' };
+  const map = { trend: 'trends', bw: 'trends', tests: 'trends', 'test-trend': 'trends' };
   const cur = map[current] || current;
   return '<nav class="tabbar">' + tabs.map(([id, label, icon]) =>
     '<button class="tab' + (cur === id ? ' on' : '') + '" data-a="nav" data-r="' + id + '">' + icon + '<span>' + label + '</span></button>'
@@ -1875,6 +2200,7 @@ function viewToday() {
     ${rehabCheckCard()}
     ${rehabCard()}
     ${niggleCard()}
+    ${testDayCard()}
     ${checkinCard()}
     <section class="card">
       <h2>Muscle groups</h2>
@@ -3224,6 +3550,7 @@ function viewTrends() {
   <div class="screen">
     <header class="top"><div><div class="kicker">Your progress</div><h1>Trends</h1></div></header>
     ${weeklyVolumeCard()}
+    ${testsRow()}
     ${bodyweightRow()}
     ${rows || (S.bodyLog && S.bodyLog.length ? '' : '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>')}
   </div>
@@ -3830,6 +4157,37 @@ document.addEventListener('click', ev => {
     render();
   }
 
+  /* ---- Test Day ---- */
+
+  else if (a === 'test-start') startTestDay();
+  else if (a === 'test-snooze') { S._snoozeTest = true; render(); }
+  else if (a === 'test-go') startTestTimerRun();
+  else if (a === 'test-stop') stopTestStopwatch();
+  else if (a === 'test-redo') { testTimer = null; render(); }
+  else if (a === 'test-use') { if (testTimer && testTimer.done != null) recordTestResult(testTimer.done); }
+  else if (a === 'test-save') {
+    const t = currentTest();
+    if (!t) return;
+    const inp = $('#test-val');
+    const v = inp ? parseFloat(inp.value) : NaN;
+    if (isNaN(v)) { toast('Enter a number first.'); return; }
+    if ((t.min != null && v < t.min) || (t.max != null && v > t.max)) { toast('That looks off — double-check the number.'); return; }
+    const hEl = $('#test-height');
+    if (hEl) {
+      const h = parseFloat(hEl.value);
+      if (h >= 100 && h <= 230) { S.profile.heightCm = h; save(); }
+    }
+    recordTestResult(t.decimals ? Math.round(v * 10) / 10 : Math.round(v));
+  }
+  else if (a === 'test-skip') advanceTest();
+  else if (a === 'test-quit') {
+    if (!testRun) return;
+    const n = Object.keys(testRun.results).length;
+    if (!confirm(n ? 'End Test Day? The ' + n + ' result' + (n === 1 ? '' : 's') + ' so far will be saved.' : 'End Test Day?')) return;
+    finishTestDay();
+  }
+  else if (a === 'open-test') { S._trendTest = el.dataset.id; go('test-trend'); }
+
   else if (a === 'stretch-timer') startRest(+el.dataset.secs, el.dataset.name, true);
   else if (a === 'cooldown-done') { stopRest(); go('summary'); }
   else if (a === 'hist-review') { S._reviewHist = +el.dataset.i; go('review'); }
@@ -4165,7 +4523,7 @@ window.addEventListener('online', () => { if (route === 'today') render(); });
 
 /* ---------------- boot ---------------- */
 
-delete S._snoozeBackup; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; S._schedEdit = null; // transient view state, fresh each launch
+delete S._snoozeBackup; delete S._snoozeTest; delete S._histShown; S._editHist = -1; S._hiitSheet = null; S._picker = null; S._schedEdit = null; // transient view state, fresh each launch
 S._rehabWiz = null; S._rehabCheck = null; S._rehabPain = null; S._niggle = null; S._psfsDraft = null;
 rehabInit();
 applyTheme();

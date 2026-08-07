@@ -365,6 +365,74 @@ const EXERCISES = [
     cue: 'Squat, hands down, jump the feet back, chest to floor, jump them in, stand and jump. Pace it — burpees punish enthusiasm.' },
 ];
 
+/* ---------------- Test Day battery ----------------
+   Longevity benchmarks run as a guided battery (see app.js "Test Day").
+   cadence gates when a test joins a run: biweekly core, monthly adds,
+   quarterly extras. kind drives the runner screen:
+     'number'    — manual entry (e.g. dynamometer reading, rep count)
+     'stopwatch' — tap Start / tap Stop, optional auto-stop cap (secs)
+     'countdown' — fixed timer runs first, then you enter the count
+   threshold is an evidence anchor drawn on results — a reference line,
+   never a pass/fail gate. */
+const TESTS = [
+  /* --- biweekly core --- */
+  { id: 'grip-l', name: 'Grip — left hand', cadence: 'biweekly', kind: 'number',
+    unit: 'kg', decimals: 1, min: 0, max: 120,
+    cue: 'Stand tall, elbow at your side bent to 90°. Squeeze the dynamometer as hard as you can for 3 seconds. Three tries, ~30 s apart — enter the best.',
+    why: 'Grip strength is among the best-evidenced single predictors of all-cause mortality (PURE study, Lancet 2015).' },
+  { id: 'grip-r', name: 'Grip — right hand', cadence: 'biweekly', kind: 'number',
+    unit: 'kg', decimals: 1, min: 0, max: 120,
+    cue: 'Same drill, other hand: elbow at 90°, 3-second max squeeze, best of three.',
+    why: 'A widening left/right gap can flag a niggle before it becomes an injury.' },
+  { id: 'pushups', name: 'Max push-ups', cadence: 'biweekly', kind: 'number',
+    unit: 'reps', min: 0, max: 200,
+    threshold: { val: 40, label: '40+ · lowest cardiovascular-risk band (JAMA Netw Open 2019)' },
+    cue: 'One continuous set, full range — chest to an inch off the floor, full lockout. Stop the count at the first rest or broken form.',
+    why: 'Men completing 40+ push-ups had ~96% lower incident CVD risk than those under 10 in a 10-year cohort.' },
+  { id: 'balance-l', name: 'One-leg balance — left, eyes closed', cadence: 'biweekly', kind: 'stopwatch',
+    unit: 's', cap: 60, decimals: 1,
+    threshold: { val: 10, label: '10 s · the open-eyes version of this cutoff predicted survival (BJSM 2022)' },
+    cue: 'Stand on your left foot, hands on hips, close your eyes, start the timer. Tap stop when the other foot touches down or your eyes open. Caps at 60 s.',
+    why: 'Inability to hold a 10-s one-leg stance was linked to an 84% higher all-cause mortality risk. Eyes closed is much harder — expect far lower numbers than eyes open.' },
+  { id: 'balance-r', name: 'One-leg balance — right, eyes closed', cadence: 'biweekly', kind: 'stopwatch',
+    unit: 's', cap: 60, decimals: 1,
+    threshold: { val: 10, label: '10 s · the open-eyes version of this cutoff predicted survival (BJSM 2022)' },
+    cue: 'Same on the right foot: eyes closed, hands on hips, tap stop when you touch down.',
+    why: 'Track both sides — asymmetry is as informative as the absolute number.' },
+  { id: 'chair-stands', name: '30-second chair stands', cadence: 'biweekly', kind: 'countdown',
+    unit: 'reps', cap: 30, min: 0, max: 60,
+    cue: 'Sit mid-seat, arms crossed on your chest. On the beep: stand fully, sit fully, repeat. Count complete stands in 30 seconds.',
+    why: 'The 30-s chair stand is a standard lower-body power test; power fades ~3× faster with age than strength does.' },
+  { id: 'plank', name: 'Max plank hold', cadence: 'biweekly', kind: 'stopwatch',
+    unit: 's',
+    threshold: { val: 120, label: '2 min · a common "solid core endurance" benchmark' },
+    cue: 'Forearm plank, straight line ear-to-ankle. Start the timer; tap stop when your hips sag or you drop.',
+    why: 'Trunk endurance underpins everything else in the battery — and it is very trainable.' },
+  /* --- monthly adds --- */
+  { id: 'srt', name: 'Sitting-rising test', cadence: 'monthly', kind: 'number',
+    unit: 'pts', decimals: 1, min: 0, max: 10,
+    threshold: { val: 8, label: '8+ · markedly lower all-cause mortality (Eur J Prev Cardiol 2012)' },
+    cue: 'Cross-legged sit down to the floor and stand back up. Start from 10; subtract 1 for each hand/knee/forearm used and 0.5 for a wobble — down and up scored 5 each.',
+    why: 'Composite of strength, flexibility and balance; scores under 8 tracked with ~2× mortality over 6 years.' },
+  { id: 'sit-reach', name: 'Sit-and-reach', cadence: 'monthly', kind: 'number',
+    unit: 'cm', decimals: 1, min: -40, max: 50,
+    cue: 'Sit, legs straight, feet flat against a box or wall. Reach forward slowly past your toes: past them is positive cm, short of them negative. Best of 3.',
+    why: 'Hamstring/lower-back flexibility — the mobility canary in the battery.' },
+  { id: 'waist', name: 'Waist circumference', cadence: 'monthly', kind: 'number',
+    unit: 'cm', decimals: 1, min: 40, max: 200,
+    cue: 'Tape at the navel, relaxed exhale, no sucking in. Measure twice, take the average.',
+    why: 'Waist-to-height ratio under 0.5 is the simplest well-validated adiposity target ("keep your waist under half your height").' },
+  { id: 'vo2', name: 'VO₂max (from WHOOP)', cadence: 'monthly', kind: 'number',
+    unit: 'ml/kg/min', decimals: 1, min: 10, max: 90,
+    cue: 'Copy the current estimate from WHOOP → Health Monitor. Same source every time so the trend is apples-to-apples.',
+    why: 'Cardiorespiratory fitness is the strongest modifiable predictor of lifespan in exercise science (JAMA 2018 cohort, n≈122k).' },
+  /* --- quarterly extras --- */
+  { id: 'cooper', name: 'Cooper 12-minute run', cadence: 'quarterly', kind: 'number',
+    unit: 'm', min: 400, max: 5000,
+    cue: 'Track or flat route: run/walk as far as you can in 12 minutes, enter the distance in meters. Skip freely — it needs fresh legs and decent weather.',
+    why: 'A field-test proxy for VO₂max (distance in km ≈ (VO₂max + 11.3) / 22.4); a useful cross-check on the wearable estimate.' },
+];
+
 /* ---------------- cool-down stretches ----------------
    Static holds offered after Finish, matched to the muscles trained. */
 const STRETCHES = [

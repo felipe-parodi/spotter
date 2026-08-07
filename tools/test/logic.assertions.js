@@ -826,4 +826,67 @@ function rbTrack(pattern, region) {
   S.settings.equipment = savedEquip; S.sel = savedSel;
 }
 
+// --- Test Day battery ---
+{
+  const savedTests = S.tests;
+  S.tests = [];
+  S.active = null; S.draft = null; route = 'today';
+
+  assert(TESTS.length === 12, 'battery defined: 12 tests (' + TESTS.length + ')');
+  assert(TESTS.filter(t => t.cadence === 'biweekly').length === 7, 'biweekly core is 7 tests');
+  assert(testDayDue(), 'test day due when never run');
+  assert(dueTests().length === TESTS.length, 'first run includes everything');
+  assert(viewToday().indexOf('Test Day') >= 0, 'today shows the baseline nudge');
+
+  // simulate a full guided run: stopwatch tests get seconds, the rest reps/values
+  testRun = { list: dueTests().map(t => t.id), i: 0, results: {} };
+  while (testRun) {
+    const t = currentTest();
+    recordTestResult(t.kind === 'stopwatch' ? 12.3 : t.id === 'waist' ? 80 : 25);
+  }
+  assert(S.tests.length === 1, 'run saved to S.tests');
+  assert(S.tests[0].results.pushups === 25, 'a result landed under its test id');
+  assert(S.tests[0].results.plank === 12.3, 'stopwatch value stored with decimals');
+  assert(route === 'test-summary', 'finishing routes to the summary');
+  assert(!testDayDue(), 'not due right after a run');
+  assert(dueTests().length === 0, 'nothing due right after a run');
+
+  // age the run 14 days: biweekly core returns, monthly rests
+  S.tests[0].date = new Date(Date.now() - 14 * DAY_MS).toISOString();
+  assert(testDayDue(), 'due again after 14 days');
+  assert(dueTests().every(t => t.cadence === 'biweekly'), 'only the biweekly core after 14 days');
+
+  // 28 days: monthly joins, quarterly still rests
+  S.tests[0].date = new Date(Date.now() - 28 * DAY_MS).toISOString();
+  assert(dueTests().some(t => t.cadence === 'monthly'), 'monthly tests join after a month');
+  assert(!dueTests().some(t => t.cadence === 'quarterly'), 'quarterly still resting at a month');
+
+  // a second run: series order, deltas, skips falling back to older results
+  testRun = { list: ['pushups'], i: 0, results: {} };
+  recordTestResult(30);
+  const ser = testSeries('pushups');
+  assert(ser.length === 2 && ser[0].val === 25 && ser[1].val === 30, 'series is oldest-first');
+  assert(lastTestResult('plank').val === 12.3, 'a test skipped this run keeps its older result');
+  assert(viewTestSummary().indexOf('↑ +5') >= 0, 'summary shows the improvement delta');
+
+  // waist-to-height uses profile height
+  S.profile.heightCm = 175;
+  assert(viewTests().indexOf('0.46') >= 0, 'waist-to-height computed (80/175 → 0.46)');
+
+  // views render
+  assert(viewTests().indexOf('Max push-ups') >= 0, 'tests view lists the battery');
+  S._trendTest = 'pushups';
+  assert(viewTestTrend().indexOf('30') >= 0, 'trend view shows the latest value');
+  assert(viewTrends().indexOf('Test Day') >= 0, 'trends screen has the Test Day row');
+
+  // quitting with nothing recorded saves no run
+  testRun = { list: ['pushups'], i: 0, results: {} };
+  finishTestDay();
+  assert(S.tests.length === 2, 'empty quit does not add a run');
+  assert(route === 'today', 'empty quit returns home');
+
+  delete S.profile.heightCm;
+  S.tests = savedTests; testRun = null; route = 'today';
+}
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');
