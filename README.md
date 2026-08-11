@@ -14,7 +14,13 @@ after install — each phone keeps its own profile and history.
   no muscle group is hit two days running — rest days stay restful, an optional
   cardio day breaks up dense weeks, and any day is tap-to-override (with a
   warning, never a block). Today shows the plan with one-tap build, a mini week
-  strip, and a "you missed X — swap it in?" catch-up when it's safe.
+  strip, and a "you missed X — swap it in?" catch-up when it's safe. The week
+  also has a **volume floor**: ≥8 hard sets per muscle group per week. If a
+  group is projected to end the week short and today is its last scheduled
+  outing, the generated session quietly tops it up — extra sets on its
+  exercises first (compounds first, five-set cap), one extra movement if
+  that's not enough and time allows, with a note on the plan preview saying
+  why. Gentler (low-readiness) days skip the top-up.
 - **At home** — one tap on Today builds the same plan from your current muscle-group
   picks using nothing but a floor, a wall and a chair. It's a temporary equipment
   override, not a second profile: same generator, same weight/rep progression,
@@ -51,6 +57,12 @@ after install — each phone keeps its own profile and history.
   the working weight. PRs detected, today's split suggested from what you
   trained last, and each exercise takes a **persistent note** (seat height,
   grip, straps).
+- The 5-minute warm-up is a **pinned check-off row** at the top of every
+  non-rehab session (easy cardio plus mobility bits matched to the day's
+  muscles) — one tap, no set grid, doesn't count toward the session's set
+  totals. Checking it credits 3 easy-cardio minutes to the weekly cardio
+  tally and the calorie estimate, and the session's History review shows
+  a "warm-up ✓".
 - After **Finish**: an optional cool-down (3–4 stretches matched to what you
   trained, with hold timers — skippable), then a summary with a deliberately
   **conservative calorie estimate** (MET-based; only shown when a bodyweight
@@ -75,8 +87,21 @@ after install — each phone keeps its own profile and history.
 - History with a read-only **Review** of any past session (same photo cards as
   a live workout) and one-tap **Repeat** that rebuilds it as today's plan with
   refreshed weights; weekly streak plus a **daily streak** that tolerates up to
-  two rest days; **sets-per-muscle-group bars for the current week** in Trends;
-  JSON backup export/import. Screen stays awake during a session.
+  two rest days; **sets-per-muscle-group bars for the current week** in Trends
+  with a tick at the 8-set weekly target (bars light up coral once a group
+  clears it); JSON backup export/import. Screen stays awake during a session.
+- Simple hypertrophy heuristics are baked in rather than configurable:
+  every strength card carries the effort line *"take every set close to
+  failure — about 1 rep left in the tank"* (rehab, timed holds, and
+  restorative sessions excepted), rep prescriptions already live in the
+  5–20 range at ~3–4 sets per exercise, and the Trends bodyweight row shows
+  a daily protein target of ~1 g per lb bodyweight (≈2.2 g/kg).
+- **Water & journal** — a small Today card with a tap counter for water
+  bottles (your bottle, whatever it holds — no oz/ml math) and a one-line
+  daily journal note that saves as you type. Trends grows a water row
+  (today's count, two-week average, sparkline) once you've logged some, and
+  recent notes are browsable at the bottom of the Log tab. Empty days take
+  up no storage.
 - **Test Day** — a guided, ~10-minute battery of longevity benchmarks
   (grip strength per hand, max push-ups, eyes-closed one-leg balance,
   30-second chair stands, max plank; monthly adds: sitting-rising test,

@@ -18,6 +18,8 @@ assert(plan.est <= 45, 'cardio-only est sane (' + plan.est + ')');
 S.draft = generateWorkout(['legs', 'cardio'], 45);
 startWorkout();
 assert(S.active && S.active.ex.length, 'workout started');
+assert(S.active.warmup && !S.active.warmup.done, 'warm-up row attached, unchecked');
+S.active.warmup.done = true;
 S.active.ex.forEach(e => e.log.forEach(s => { s.done = true; s.r = e.reps[1]; if (!e.cardio && e.mode !== 'time') s.w = 50; }));
 S.active.ex.push({ id: 'hiit-tabata', name: 'Tabata', cue: '', cmp: false, uni: false, mode: 'time', hiit: true, eqLabel: 'HIIT block', sets: 1, reps: [4, 4], rest: 0, log: [{ w: null, r: 4, done: true }] });
 S.active.startedAt = Date.now() - 45 * 60000;
@@ -26,6 +28,7 @@ assert(route === 'cooldown', 'finish routes to cooldown (' + route + ')');
 const entry = S.history[0];
 assert(entry.exercises.some(e => e.cardio), 'history entry keeps cardio flag');
 assert(entry.exercises.some(e => e.hiit), 'history entry keeps hiit flag');
+assert(entry.warmupMin === 3, 'checked warm-up recorded as 3 easy-cardio minutes');
 assert(lastFinished === entry, 'lastFinished set (no persisted copy)');
 assert(!('lastSummary' in S) || S.lastSummary == null, 'lastSummary not stored in state');
 
@@ -77,9 +80,13 @@ S.history = [{ date: day(0), groups: ['legs'], minutes: 40, setCount: 7, volume:
   { id: 'treadmill-run', name: 'Run', mode: 'time', cardio: true, sets: [{ w: null, r: 18 }] },
 ]}];
 const wv = weeklyMuscleSets();
-assert(wv.counts.get('Legs') === 3, 'weekly sets: Legs 3 (' + wv.counts.get('Legs') + ')');
-assert(wv.counts.get('Chest') === 1, 'weekly sets: Chest 1');
+assert(wv.counts.get('legs') === 3, 'weekly sets: legs 3 (' + wv.counts.get('legs') + ')');
+assert(wv.counts.get('chest') === 1, 'weekly sets: chest 1');
 assert(wv.cardioMin === 18, 'weekly cardio minutes 18 (' + wv.cardioMin + ')');
+assert(weeklyVolumeCard().includes('aim for 8'), 'weekly card shows the 8-set target');
+S.history[0].warmupMin = 3;
+assert(weeklyMuscleSets().cardioMin === 21, 'warm-up minutes join weekly cardio');
+delete S.history[0].warmupMin;
 
 // --- repeat session ---
 S.notes = {};
@@ -88,6 +95,54 @@ assert(route === 'preview' && S.draft && S.draft.repeatOf, 'repeat builds a draf
 assert(S.draft.ex.length === 3, 'repeat mirrors exercises (' + S.draft.ex.length + ')');
 assert(S.draft.ex.find(e => e.id === 'bb-squat').sets === 3, 'repeat mirrors set counts');
 S.draft = null;
+
+// --- weekly volume top-up (≥8 hard sets per muscle group per week) ---
+// History above holds 3 legs sets + 1 chest set this week. No scheduled day
+// left → this session is the last chance for both groups.
+S.schedule.enabled = true;
+S.schedule.days = {};
+const mkPick = (id, sets) => Object.assign({}, EXERCISES.find(e => e.id === id), { sets, reps: [8, 12], rest: 90 });
+let picked = [mkPick('bb-squat', 3)];
+let ctx = { total: 20, budget: 60, minutes: 60, usedIds: new Set(['bb-squat']), recent: new Map() };
+let tu = topupWeeklyVolume(picked, ctx);
+assert(tu.has('legs'), 'top-up fires for legs on its last scheduled day');
+assert(picked[0].sets === 5, 'top-up bumps sets to the 5-set cap (' + picked[0].sets + ')');
+assert(ctx.total > 20, 'top-up accounts for the added time');
+assert(picked.length === 1 || picked.every(p => !p.cardio), 'top-up never adds cardio');
+picked = [mkPick('db-bench', 3)];
+ctx = { total: 20, budget: 60, minutes: 60, usedIds: new Set(['db-bench']), recent: new Map() };
+tu = topupWeeklyVolume(picked, ctx);
+// chest: 1 done + 3 planned → 4 short: bump to 5 (+2), then one extra exercise
+assert(tu.has('chest') && picked[0].sets === 5 && picked.length === 2, 'top-up adds an extra exercise when bumps aren’t enough');
+picked = [mkPick('bb-squat', 3)];
+ctx = { total: 20, budget: 19, minutes: 30, usedIds: new Set(['bb-squat']), recent: new Map() };
+tu = topupWeeklyVolume(picked, ctx);
+assert(picked[0].sets === 4 && picked.length === 1, 'top-up respects the time budget');
+if (new Date().getDay() !== 0) { // Sunday is genuinely the week's last day
+  const ord = [1, 2, 3, 4, 5, 6, 0];
+  S.schedule.days[ord[ord.indexOf(new Date().getDay()) + 1]] = { split: 'legs', minutes: null };
+  assert(groupTrainedLaterThisWeek('legs') && !groupTrainedLaterThisWeek('chest'), 'later legs day covers legs, not chest');
+  picked = [mkPick('bb-squat', 3)];
+  ctx = { total: 20, budget: 60, minutes: 60, usedIds: new Set(['bb-squat']), recent: new Map() };
+  assert(!topupWeeklyVolume(picked, ctx).size && picked[0].sets === 3, 'no top-up when the group trains again this week');
+}
+S.schedule.enabled = false;
+S.schedule.days = {};
+picked = [mkPick('bb-squat', 3)];
+ctx = { total: 20, budget: 60, minutes: 60, usedIds: new Set(['bb-squat']), recent: new Map() };
+assert(!topupWeeklyVolume(picked, ctx).size, 'no top-up when the schedule is off');
+
+// --- daily log: water bottles + journal ---
+dayLogSet({ water: 2 });
+assert(dayLogGet().water === 2, 'water bottles count up');
+dayLogSet({ note: 'good energy' });
+assert(dayLogGet().water === 2 && dayLogGet().note === 'good energy', 'note joins water on the same day');
+assert(viewToday().includes('water-plus'), 'Today shows the water counter');
+assert(journalCard().includes('good energy'), 'journal note listed in History');
+assert(waterRow().includes('2 bottles today'), 'water trend row shows today');
+dayLogSet({ water: 0, note: '' });
+assert(!Object.keys(S.dayLog).length, 'empty day pruned from storage');
+assert(waterRow() === '', 'water row hidden with nothing logged');
 
 // --- views render without crashing ---
 S.history = [entry];

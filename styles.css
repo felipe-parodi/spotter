@@ -343,6 +343,13 @@ h2 { font-size: 17px; }
   padding-left: 10px;
 }
 
+.rir-line {
+  font-size: 12.5px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+
 .sugg {
   font-size: 13.5px;
   font-weight: 600;
@@ -469,6 +476,13 @@ h2 { font-size: 17px; }
 .set-row.done .check { background: var(--accent); border-color: var(--accent); }
 .set-row.done .check svg { stroke: #fff; opacity: 1; }
 .set-row.done input { opacity: 0.55; }
+
+.warmup-row { display: flex; align-items: center; gap: 12px; }
+.warmup-row .warmup-main { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.warmup-row .check { flex: 0 0 auto; }
+.warmup-row.done { opacity: 0.75; }
+.warmup-row.done .check { background: var(--accent); border-color: var(--accent); }
+.warmup-row.done .check svg { stroke: #fff; opacity: 1; }
 
 .add-set {
   align-self: flex-start;
@@ -982,14 +996,54 @@ h2 { font-size: 17px; }
 }
 .exnote input:focus { border-color: var(--ink); }
 
+/* ---------------- daily log: water + journal ---------------- */
+.water-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.water-ctl { display: flex; align-items: center; gap: 4px; }
+.water-btn {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 20px; font-weight: 700;
+  display: grid; place-items: center;
+  transition: all 0.15s ease;
+}
+.water-btn:active { background: var(--accent-soft); border-color: var(--accent); }
+.water-btn:disabled { opacity: 0.35; }
+.water-n {
+  min-width: 34px;
+  text-align: center;
+  font-size: 20px; font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.day-card input[data-f="daynote"] {
+  margin-top: 10px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: var(--font);
+  color: var(--ink);
+  outline: none;
+}
+.day-card input[data-f="daynote"]:focus { border-color: var(--ink); }
+.journal-list .hist-ex { display: flex; gap: 12px; padding: 5px 0; }
+.journal-list .hist-ex .muted { flex: 0 0 auto; }
+
 /* ---------------- weekly volume bars ---------------- */
 
 .wv { display: flex; flex-direction: column; gap: 7px; }
 .wv-row { display: grid; grid-template-columns: 82px 1fr 26px; gap: 10px; align-items: center; }
 .wv-label { font-size: 13px; font-weight: 700; }
-.wv-bar { height: 8px; border-radius: 100px; background: var(--sunken); overflow: hidden; }
-.wv-fill { height: 100%; border-radius: 100px; background: var(--accent); }
+.wv-bar { height: 8px; border-radius: 100px; background: var(--sunken); position: relative; }
+.wv-fill { height: 100%; border-radius: 100px; background: var(--muted); opacity: 0.55; }
+.wv-fill.met { background: var(--accent); opacity: 1; }
+.wv-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--muted); opacity: 0.5; transform: translateX(-50%); }
 .wv-n { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.wv-n.met { color: var(--accent); }
 
 /* ---------------- weekly schedule ---------------- */
 

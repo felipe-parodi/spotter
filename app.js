@@ -27,6 +27,7 @@ function defaultState() {
     schedule: { enabled: false, minutes: 45, cardioDay: false, variant: 0, days: {} },
     // optional cycle-aware mode (female profiles) — see cycle notes in README
     cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], checkins: [] },
+    dayLog: {},    // per-day water + journal: {'YYYY-MM-DD': {water: n, note: ''}}
     // Rebuild (rehab mode) — see REHAB-SPEC.md. tracks[] holds one 12-week
     // block per area; niggles[] is the lightweight "this bugged me" log.
     rehab: { tracks: [], niggles: [], dismissed: null },
@@ -60,6 +61,7 @@ function loadState() {
       s.rehab.niggles = s.rehab.niggles || [];
       s.bodyLog = parsed.bodyLog || [];
       s.tests = parsed.tests || [];
+      s.dayLog = parsed.dayLog || {};
       delete s.lastSummary; // older versions persisted a copy of history[0]
       // seed the log from an existing single bodyweight so the trend has a start point
       if (!s.bodyLog.length && s.profile && s.profile.bodyweight > 0) {
@@ -228,7 +230,7 @@ function sessionKcal(w) {
   const bw = bwAt(w.date);
   if (!bw || !(w.minutes > 0)) return null;
   const kg = unitLabel() === 'kg' ? bw : bw * KG;
-  let cardio = 0, hiit = 0; // cardio/HIIT entries log minutes per set
+  let cardio = w.warmupMin || 0, hiit = 0; // cardio/HIIT entries log minutes per set
   for (const e of (w.exercises || [])) {
     const mins = e.sets.reduce((x, s) => x + (s.r || 0), 0);
     if (e.hiit) hiit += mins;
@@ -506,6 +508,24 @@ function logPeriodStart(iso) {
   save();
 }
 
+/* ---------------- daily log: water bottles + journal ---------------- */
+
+/* Local calendar date, unlike todayKey()'s UTC — a water counter that
+   resets at 4pm (UTC midnight in California) would be maddening. */
+function localDayKey(d) {
+  d = d || new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function dayLogGet(k) { return S.dayLog[k || localDayKey()] || { water: 0, note: '' }; }
+
+function dayLogSet(patch) {
+  const k = localDayKey();
+  S.dayLog[k] = Object.assign({ water: 0, note: '' }, S.dayLog[k], patch);
+  if (!S.dayLog[k].water && !S.dayLog[k].note) delete S.dayLog[k]; // empty days don't accumulate
+  save();
+}
+
 /* ---------------- exercise filtering & progression ---------------- */
 
 /* "At home" is a temporary equipment override, not a second profile: while
@@ -727,6 +747,10 @@ function generateWorkout(groupIds, minutes) {
     total += est;
   }
 
+  const ctx = { total, budget, minutes, usedIds, recent };
+  const topup = cardioOnly ? new Set() : topupWeeklyVolume(picked, ctx);
+  total = ctx.total;
+
   picked.sort((a, b) => {
     const order = x => x.cardio ? 2 : x.m.includes('core') ? 1 : 0;
     if (order(a) !== order(b)) return order(a) - order(b);
@@ -739,7 +763,53 @@ function generateWorkout(groupIds, minutes) {
     home: homeOnly || undefined,
     est: Math.round(total + 5),
     ex: picked.map(p => snapshot(p, p)),
+    topup: topup.size ? Array.from(topup).map(id => (UI_GROUPS.find(u => u.id === id) || { label: id }).label) : undefined,
   };
+}
+
+/* Weekly volume top-up: when the schedule is on and this is the last
+   scheduled day this week that trains a muscle group projected to end
+   under the 8-set weekly floor, add sets here (compounds first, 5-set
+   cap), then one extra exercise if there's still a gap and time for it.
+   Gentler days skip it — no point dropping a set and adding it back.
+   Mutates picked (set counts, possibly one appended exercise) and
+   ctx.total; returns the Set of topped-up group ids. */
+function topupWeeklyVolume(picked, ctx) {
+  const topup = new Set();
+  if (!S.schedule.enabled || todayReadiness().dropSet) return topup;
+  const done = weeklyMuscleSets().counts;
+  const planned = new Map();
+  for (const p of picked) {
+    if (p.cardio) continue;
+    const gid = uiGroupIdOf(p.m[0]);
+    if (gid) planned.set(gid, (planned.get(gid) || 0) + p.sets);
+  }
+  for (const [gid, n] of planned) {
+    let short = WEEK_SET_TARGET - (done.get(gid) || 0) - n;
+    if (short <= 0 || groupTrainedLaterThisWeek(gid)) continue;
+    const own = picked.filter(p => !p.cardio && uiGroupIdOf(p.m[0]) === gid)
+      .sort((a, b) => (b.cmp ? 1 : 0) - (a.cmp ? 1 : 0));
+    for (const p of own) {
+      while (short > 0 && p.sets < 5 && ctx.total + 0.75 + p.rest / 60 <= ctx.budget + 4) {
+        p.sets += 1; ctx.total += 0.75 + p.rest / 60; short -= 1; topup.add(gid);
+      }
+    }
+    if (short > 0) {
+      const muscles = (UI_GROUPS.find(u => u.id === gid) || { muscles: [] }).muscles;
+      const ex = pickExercise(muscles[0], ctx.usedIds, ctx.recent, false, null);
+      if (ex && !ex.cardio) {
+        const params = assignParams(ex, ctx.minutes);
+        params.sets = Math.min(params.sets, Math.max(2, short));
+        const est = estMinutes(params);
+        if (ctx.total + est <= ctx.budget + 4) {
+          ctx.usedIds.add(ex.id);
+          picked.push(Object.assign({}, ex, params));
+          ctx.total += est; topup.add(gid);
+        }
+      }
+    }
+  }
+  return topup;
 }
 
 function swapExercise(i) {
@@ -831,6 +901,33 @@ function splitMuscles(key) {
     if (ui) ui.muscles.forEach(m => out.add(m));
   }
   return out;
+}
+
+/* ---- weekly volume target: ≥8 hard sets per muscle group per week ---- */
+const WEEK_SET_TARGET = 8;
+
+function uiGroupIdOf(muscle) {
+  const g = UI_GROUPS.find(u => u.id !== 'full' && u.muscles.includes(muscle));
+  return g ? g.id : null;
+}
+
+/* Does any scheduled day after today (Mon-based week) train this group?
+   An umbrella split ('full') covers a group when their muscle lists overlap. */
+function groupTrainedLaterThisWeek(gid) {
+  if (!S.schedule.enabled) return false;
+  const target = UI_GROUPS.find(u => u.id === gid);
+  if (!target) return false;
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  for (const d of order.slice(order.indexOf(new Date().getDay()) + 1)) {
+    const p = S.schedule.days[d];
+    if (!p || !SPLITS[p.split]) continue;
+    for (const g of SPLITS[p.split].groups) {
+      if (g === gid) return true;
+      const ui = UI_GROUPS.find(u => u.id === g);
+      if (ui && target.muscles.some(m => ui.muscles.includes(m))) return true;
+    }
+  }
+  return false;
 }
 
 /* Penalty for training two splits on back-to-back days. */
@@ -994,6 +1091,8 @@ function startWorkout() {
   if (!S.draft) return;
   S.active = Object.assign({}, S.draft, {
     startedAt: Date.now(),
+    // rehab sessions carry their own "before you start" ritual
+    warmup: S.draft.rehab ? undefined : { done: false },
     ex: S.draft.ex.map(e => Object.assign({}, e, {
       log: Array.from({ length: e.sets }, () => ({ w: null, r: null, done: false })),
       suggest: e.rehabEx ? rehabSuggest(e) : suggestFor(e),
@@ -1006,7 +1105,7 @@ function startWorkout() {
 function startFreestyle() {
   S.active = {
     startedAt: Date.now(), groups: ['freestyle'], minutes: 45, est: 0,
-    ex: [],
+    warmup: { done: false }, ex: [],
   };
   S._picker = { q: '' };
   save(); acquireWakeLock(); ensureAudio(); go('workout');
@@ -1383,6 +1482,7 @@ function finishWorkout(force) {
   entry.volume = entry.exercises.reduce((v, e) =>
     v + e.sets.reduce((x, s) => x + (s.w || 0) * (s.r || 0), 0), 0);
   entry.setCount = entry.exercises.reduce((n, e) => n + e.sets.length, 0);
+  if (a.warmup && a.warmup.done) entry.warmupMin = 3; // the easy-cardio part of the 5-min warm-up
   entry.prs = computePRs(entry);
   if (a.rehab) { entry.rehab = a.rehab; recordRehabSession(entry, a); }
   S.history.unshift(entry);
@@ -2290,6 +2390,7 @@ function viewToday() {
     ${niggleCard()}
     ${testDayCard()}
     ${checkinCard()}
+    ${dayCard()}
     <section class="card">
       <h2>Muscle groups</h2>
       <div class="chips">${chips}</div>
@@ -2309,6 +2410,24 @@ function viewToday() {
   </div>
   ${S._hiitSheet ? hiitSheetHTML() : ''}
   ${tabbar('today')}`;
+}
+
+/* Water counter + one-line journal for the day. The note saves as you type
+   (no re-render — that would steal focus mid-word, like the PSFS inputs). */
+function dayCard() {
+  const d = dayLogGet();
+  return `
+  <section class="card day-card">
+    <div class="water-row">
+      <div><strong>Water</strong> <span class="muted small">· bottles today</span></div>
+      <div class="water-ctl">
+        <button class="water-btn" data-a="water-minus" aria-label="One bottle fewer"${d.water ? '' : ' disabled'}>−</button>
+        <span class="water-n">${d.water}</span>
+        <button class="water-btn" data-a="water-plus" aria-label="One bottle more">＋</button>
+      </div>
+    </div>
+    <input type="text" data-f="daynote" value="${esc(d.note)}" placeholder="Journal — anything worth remembering today?" autocomplete="off">
+  </section>`;
 }
 
 function hiitSheetHTML() {
@@ -2466,6 +2585,7 @@ function viewPreview() {
       <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : d.home ? 'At home · no equipment' : goal.label} · about ${d.est} min · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
     </header>
     ${d.repeatOf ? '<div class="hint">Repeat of ' + esc(fmtDate(d.repeatOf)) + ' — same exercises and sets, weights refreshed from your latest numbers.</div>' : ''}
+    ${d.topup && d.topup.length ? '<div class="hint">Extra sets for ' + esc(d.topup.join(' & ')) + ' — last scheduled day this week to reach ' + WEEK_SET_TARGET + ' sets.</div>' : ''}
     ${d.advanced ? '<div class="card rb-good"><strong>Phase ' + d.advanced + ' — ' + esc(PHASE_META[d.advanced - 1].name) + '</strong><span class="muted">' + esc(PHASE_META[d.advanced - 1].blurb) + '</span></div>' : ''}
     ${d.verdict && d.verdict.note ? '<div class="rb-verdict ' + esc(d.verdict.kind) + '">' + esc(d.verdict.note) + '</div>' : ''}
     ${track
@@ -2515,7 +2635,9 @@ function viewWorkout() {
     </header>
     <div class="progress"><div class="progress-fill" id="pbar" style="width:${100 * doneSets / Math.max(1, totalSets)}%"></div></div>
     ${a.rehab ? '<div class="card warm rb"><strong>Rebuild · week ' + trackWeek(trackById(a.rehab) || { startedAt: todayISO() }) + '</strong><span class="muted">Up to 5 out of 10 during is fine. Stop a set if it sharpens past that — the morning check is what counts.</span></div>'
-      : freestyle && !a.ex.length ? '' : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups, a.home)) + '</span></div>'}
+      : freestyle && !a.ex.length ? ''
+      : a.warmup ? warmupRowHTML(a)
+      : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups, a.home)) + '</span></div>'}
     ${cards}
     ${a.rehab ? '' : '<button class="add-ex" data-a="open-picker">＋ Add exercise</button>'}
     ${a.ex.length ? '<button class="btn-primary big" data-a="finish">Finish session</button>' : ''}
@@ -2534,6 +2656,21 @@ function viewWorkout() {
       <button class="rest-btn" data-a="rest-skip">Skip</button>
     </div>
   </div>`;
+}
+
+/* Pinned check-off row above the exercise cards — one tap, no set grid,
+   stays out of the 1-of-N numbering and the session's set counts. */
+function warmupRowHTML(a) {
+  return `
+  <section class="card warmup-row${a.warmup.done ? ' done' : ''}">
+    <div class="warmup-main">
+      <strong>Warm-up · ~5 min</strong>
+      <span class="muted small">${esc(warmupFor(a.groups, a.home))}</span>
+    </div>
+    <button class="check" data-a="warmup-done" aria-label="Mark warm-up done">
+      <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </section>`;
 }
 
 function firstWeightedIndex() {
@@ -2604,6 +2741,7 @@ function exerciseCard(e, i) {
     ${e.tempo ? '<div class="tempo-line"><span>Tempo · ' + esc(tempoText(e.tempo)) + '</span><button class="tempo-btn" data-a="tempo" data-i="' + i + '">Start guide</button></div>' : ''}
     ${sugg.note ? '<div class="sugg' + (sugg.up ? ' up' : '') + '">' + esc(sugg.note) + '</div>' : ''}
     ${e.cue ? '<p class="cue">' + esc(e.cue) + '</p>' : ''}
+    ${e.rehabEx || e.cardio || e.hiit || e.mode === 'time' || S.active.restorative ? '' : '<p class="rir-line">Take every set close to failure — about 1 rep left in the tank.</p>'}
     ${howtoHTML(e.id)}
     ${noteHTML(e.id)}
     ${warmupSetsHTML(e, i)}
@@ -3526,8 +3664,22 @@ function viewHistory() {
     </div>
     ${items || '<p class="fine">No sessions yet. Finished workouts land here and drive the weight suggestions.</p>'}
     ${S.history.length > shown ? '<button class="btn-ghost" data-a="hist-more">Show earlier sessions (' + (S.history.length - shown) + ' more)</button>' : ''}
+    ${journalCard()}
   </div>
   ${tabbar('history')}`;
+}
+
+/* Recent daily journal notes (written on the Today screen). */
+function journalCard() {
+  const days = Object.keys(S.dayLog).filter(k => S.dayLog[k].note).sort().reverse().slice(0, 14);
+  if (!days.length) return '';
+  const rows = days.map(k =>
+    '<div class="hist-ex"><span class="muted">' + fmtDate(k + 'T12:00:00') + '</span><span>' + esc(S.dayLog[k].note) + '</span></div>').join('');
+  return `
+  <section class="card">
+    <h2>Journal</h2>
+    <div class="journal-list">${rows}</div>
+  </section>`;
 }
 
 /* ----- session review (read-only, workout-style cards with images) ----- */
@@ -3572,7 +3724,7 @@ function viewReview() {
     <header class="top">
       <button class="back" data-a="nav" data-r="history">‹</button>
       <div><div class="kicker">${esc(fmtDate(w.date))}</div><h1>${esc(groupLabels(w.groups))}</h1>
-      <p class="muted small">${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${kcal ? ' · ~' + kcal + ' kcal' : ''}</p></div>
+      <p class="muted small">${w.minutes} min · ${w.setCount} sets${w.warmupMin ? ' · warm-up ✓' : ''}${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${kcal ? ' · ~' + kcal + ' kcal' : ''}</p></div>
     </header>
     ${w.prs && w.prs.length ? '<div class="pr-note"><strong>Personal record' + (w.prs.length > 1 ? 's' : '') + ':</strong> ' + esc(w.prs.join(' · ')) + '</div>' : ''}
     ${cards}
@@ -3583,20 +3735,21 @@ function viewReview() {
 
 /* ----- trends ----- */
 
-/* Hard sets per muscle group this week (Mon-based), plus cardio minutes. */
+/* Hard sets per muscle group this week (Mon-based), keyed by UI group id,
+   plus cardio minutes. */
 function weeklyMuscleSets() {
   const start = weekStart(new Date());
   const counts = new Map();
   let cardioMin = 0;
   for (const w of S.history) {
     if (weekStart(new Date(w.date)) !== start) break; // newest-first: this week is a prefix
+    cardioMin += w.warmupMin || 0;
     for (const e of (w.exercises || [])) {
       if (e.cardio || e.hiit) { cardioMin += e.sets.reduce((x, s) => x + (s.r || 0), 0); continue; }
       const def = findEx(e.id);
       const m = def ? def.m[0] : null;
       const g = UI_GROUPS.find(u => u.id !== 'full' && u.muscles.includes(m));
-      const label = g ? g.label : 'Other';
-      counts.set(label, (counts.get(label) || 0) + e.sets.length);
+      counts.set(g ? g.id : 'other', (counts.get(g ? g.id : 'other') || 0) + e.sets.length);
     }
   }
   return { counts, cardioMin };
@@ -3605,17 +3758,22 @@ function weeklyMuscleSets() {
 function weeklyVolumeCard() {
   const { counts, cardioMin } = weeklyMuscleSets();
   if (!counts.size && !cardioMin) return '';
-  const max = Math.max(1, ...counts.values());
-  const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([label, n]) => `
+  const max = Math.max(WEEK_SET_TARGET, ...counts.values());
+  const tick = Math.round(100 * WEEK_SET_TARGET / max);
+  const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([id, n]) => {
+    const g = UI_GROUPS.find(u => u.id === id);
+    const met = n >= WEEK_SET_TARGET ? ' met' : '';
+    return `
     <div class="wv-row">
-      <span class="wv-label">${esc(label)}</span>
-      <div class="wv-bar"><div class="wv-fill" style="width:${Math.round(100 * n / max)}%"></div></div>
-      <span class="wv-n">${n}</span>
-    </div>`).join('');
+      <span class="wv-label">${esc(g ? g.label : 'Other')}</span>
+      <div class="wv-bar"><div class="wv-fill${met}" style="width:${Math.round(100 * n / max)}%"></div><i class="wv-tick" style="left:${tick}%"></i></div>
+      <span class="wv-n${met}">${n}</span>
+    </div>`;
+  }).join('');
   return `
     <section class="card">
       <h2>This week</h2>
-      <p class="muted small">Sets per muscle group${cardioMin ? ' · ' + cardioMin + ' min cardio' : ''}</p>
+      <p class="muted small">Sets per muscle group · aim for ${WEEK_SET_TARGET}+ a week${cardioMin ? ' · ' + cardioMin + ' min cardio' : ''}</p>
       <div class="wv">${rows}</div>
     </section>`;
 }
@@ -3647,6 +3805,7 @@ function viewTrends() {
     ${weeklyVolumeCard()}
     ${testsRow()}
     ${bodyweightRow()}
+    ${waterRow()}
     ${rows || (S.bodyLog && S.bodyLog.length ? '' : '<p class="fine">Log a few sessions and your per-exercise progress lines will appear here.</p>')}
   </div>
   ${tabbar('trends')}`;
@@ -3664,6 +3823,9 @@ function bodyweightRow() {
       sub += ' · ' + (d === 0 ? 'steady' : (d > 0 ? '+' : '−') + fmtW(Math.abs(d)) + ' ' + unitLabel() + ' overall');
       right = sparkSVG(s.map(p => p.val));
     }
+    // ~1 g protein per lb bodyweight (≈2.2 g/kg), rounded to 5 g
+    const lbs = unitLabel() === 'kg' ? latest.val / KG : latest.val;
+    sub += ' · protein ~' + Math.round(lbs / 5) * 5 + ' g/day';
   }
   return `
     <button class="card trend-row bw-row" data-a="open-bw">
@@ -3673,6 +3835,25 @@ function bodyweightRow() {
       </div>
       ${right}
     </button>`;
+}
+
+/* Bottles over the last two weeks. Only appears once water has been logged. */
+function waterRow() {
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    days.push(dayLogGet(localDayKey(new Date(Date.now() - i * DAY_MS))).water);
+  }
+  if (!days.some(v => v)) return '';
+  const today = days[days.length - 1];
+  const avg = Math.round(days.reduce((a, b) => a + b, 0) / days.length * 10) / 10;
+  return `
+    <div class="card trend-row">
+      <div class="trend-main">
+        <strong>Water</strong>
+        <span class="muted small">${today} bottle${today === 1 ? '' : 's'} today · ~${avg}/day over two weeks</span>
+      </div>
+      ${sparkSVG(days)}
+    </div>`;
 }
 
 function viewTrend() {
@@ -4291,6 +4472,9 @@ document.addEventListener('click', ev => {
   else if (a === 'remove-ex') removeDraftEx(+el.dataset.i);
   else if (a === 'start') startWorkout();
   else if (a === 'set-done') setDone(+el.dataset.i, +el.dataset.j);
+  else if (a === 'warmup-done') { S.active.warmup.done = !S.active.warmup.done; save(); render(); }
+  else if (a === 'water-plus') { dayLogSet({ water: dayLogGet().water + 1 }); render(); }
+  else if (a === 'water-minus') { dayLogSet({ water: Math.max(0, dayLogGet().water - 1) }); render(); }
   else if (a === 'finish') {
     // a Rebuild session needs its during-pain score before it can be logged
     if (S.active && S.active.rehab && typeof S.active.duringPain !== 'number') {
@@ -4542,6 +4726,8 @@ document.addEventListener('input', ev => {
     const v = el.value.trim();
     if (v) S.notes[el.dataset.id] = v; else delete S.notes[el.dataset.id];
     save();
+  } else if (f === 'daynote') {
+    dayLogSet({ note: el.value.trim() });
   } else if (f === 'name') {
     S.profile.name = el.value.trim(); save();
   } else if (f === 'eq') {
