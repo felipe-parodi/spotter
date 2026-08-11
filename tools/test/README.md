@@ -5,7 +5,7 @@ non-zero on failure.
 
 | Script | What it covers | Needs |
 |---|---|---|
-| `logic.test.js` | Generator, progression, streaks, calories, HIIT catch-up, plate math, weekly volume, repeat-session, view rendering (46 asserts) | Node only |
+| `logic.test.js` | Generator, progression, streaks, calories, HIIT catch-up, plate math, weekly volume, repeat-session, view rendering, machine-space balance, custom→machine migration (265 asserts) | Node only |
 | `rehab.test.js` | Rebuild end-to-end: red-flag gate blocks, shoulder stiffness self-test routes out, full intake wizard, a logged session, the morning check and the progression it drives, niggle logging, pause/resume, one-block-at-a-time | server + Playwright |
 | `e2e.test.js` | Full user flow in a real browser: onboard → plan → lightbox → session → cool-down → summary → review → repeat → HIIT → discard | server + Playwright |
 | `update.test.js` | Service-worker deploy flow: image cache survives updates, old shells cleaned, no photo re-downloads. Temporarily edits `sw.js` (auto-restored) | server + Playwright |

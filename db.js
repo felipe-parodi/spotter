@@ -11,6 +11,7 @@ const EQUIPMENT = [
   { id: 'dumbbell',   label: 'Dumbbells' },
   { id: 'bench',      label: 'Adjustable bench' },
   { id: 'cable',      label: 'Cable machine' },
+  { id: 'machine',    label: 'Weight machines' },
   { id: 'barbell',    label: 'Barbell' },
   { id: 'rack',       label: 'Squat rack / pull-up bar' },
   { id: 'smith',      label: 'Smith machine' },
@@ -24,9 +25,19 @@ const EQUIPMENT = [
 ];
 
 const EQ_LABEL = {
-  dumbbell: 'Dumbbells', bench: 'Bench', cable: 'Cable', barbell: 'Barbell',
+  dumbbell: 'Dumbbells', bench: 'Bench', cable: 'Cable', machine: 'Machine', barbell: 'Barbell',
   rack: 'Rack', smith: 'Smith machine', kettlebell: 'Kettlebell', bodyweight: 'Bodyweight', band: 'Band',
   treadmill: 'Treadmill', bike: 'Bike', rower: 'Rower', elliptical: 'Elliptical', stairs: 'Stairs',
+};
+
+/* Which part of the gym floor each equipment type lives in. The generator
+   softly balances a plan across both spaces so a crowded free-weight area
+   (or a busy machine row) never stalls a session — there's always somewhere
+   free to go next. Bodyweight, bands and cardio kit are space-neutral. */
+const EQ_SPACE = {
+  dumbbell: 'free', bench: 'free', barbell: 'free', rack: 'free',
+  smith: 'free', kettlebell: 'free',
+  cable: 'machines', machine: 'machines',
 };
 
 const UI_GROUPS = [
@@ -88,6 +99,12 @@ const EXERCISES = [
   { id: 'bb-bench', name: 'Barbell Bench Press', m: ['chest'], m2: ['triceps', 'shoulders'],
     eq: ['barbell', 'bench', 'rack'], lvl: 2, cmp: true, incr: 5,
     cue: 'Feet planted, slight arch, bar touches mid-chest. Use a spotter or safeties when going heavy.' },
+  { id: 'machine-chest-press', name: 'Machine Chest Press', m: ['chest'], m2: ['triceps', 'shoulders'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 5,
+    cue: 'Adjust the seat so the handles sit at mid-chest. Press until your arms are straight, then let the stack pull back slowly — no clanking.' },
+  { id: 'pec-deck', name: 'Pec Deck Fly', m: ['chest'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Forearms on the pads, elbows soft. Sweep them together until they nearly touch, squeeze, then open until you feel a stretch across your chest.' },
 
   /* ---------------- back ---------------- */
   { id: 'lat-pulldown', name: 'Lat Pulldown', m: ['back'], m2: ['biceps'],
@@ -96,6 +113,9 @@ const EXERCISES = [
   { id: 'cable-row', name: 'Seated Cable Row', m: ['back'], m2: ['biceps'],
     eq: ['cable'], lvl: 1, cmp: true, incr: 5,
     cue: 'Sit tall, pull the handle to your belly button, squeeze your shoulder blades together, resist on the way back.' },
+  { id: 'machine-row', name: 'Machine Seated Row', m: ['back'], m2: ['biceps'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 5,
+    cue: 'Chest against the pad, pull the handles to your ribs and squeeze your shoulder blades together. The pad keeps you honest — no leaning back.' },
   { id: 'db-row', name: 'One-Arm Dumbbell Row', m: ['back'], m2: ['biceps'],
     eq: ['dumbbell', 'bench'], lvl: 1, cmp: true, uni: true, incr: 5,
     cue: 'Knee and hand on the bench, back flat. Pull the dumbbell to your hip, not your armpit.' },
@@ -143,6 +163,12 @@ const EXERCISES = [
   { id: 'bb-ohp', name: 'Barbell Overhead Press', m: ['shoulders'], m2: ['triceps', 'core'],
     eq: ['barbell', 'rack'], lvl: 2, cmp: true, incr: 5,
     cue: 'Squeeze your glutes, brace your core, press the bar straight up past your face until arms lock out.' },
+  { id: 'machine-shoulder-press', name: 'Machine Shoulder Press', m: ['shoulders'], m2: ['triceps'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 5,
+    cue: 'Set the seat so the handles start at about ear height. Press up until your arms are straight, lower with control — no bouncing at the bottom.' },
+  { id: 'machine-rear-fly', name: 'Reverse Pec Deck', m: ['shoulders'], m2: ['back'],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Face the pad, arms out in front on the handles, sweep them back wide like opening double doors. All rear delts — keep it slow.' },
   { id: 'rear-fly', name: 'Bent-Over Rear Delt Fly', m: ['shoulders'], m2: ['back'],
     eq: ['dumbbell'], lvl: 1, cmp: false, incr: 5,
     cue: 'Hinge forward, arms hang down, raise the dumbbells out wide like spreading wings. Go light.' },
@@ -166,6 +192,9 @@ const EXERCISES = [
   { id: 'cable-curl', name: 'Cable Curl', m: ['biceps'], m2: [],
     eq: ['cable'], lvl: 1, cmp: false, incr: 5,
     cue: 'Stand a step back from the low pulley. Constant tension — no resting at the bottom.' },
+  { id: 'machine-curl', name: 'Machine Biceps Curl', m: ['biceps'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Upper arms flat on the pad, curl up without your elbows lifting off, lower until your arms are almost straight. The pad makes cheating impossible.' },
   { id: 'incline-curl', name: 'Incline Dumbbell Curl', m: ['biceps'], m2: [],
     eq: ['dumbbell', 'bench'], lvl: 2, cmp: false, incr: 5,
     cue: 'Lie back on an incline bench, arms hanging behind you. Deep stretch — use less weight than standing curls.' },
@@ -180,6 +209,9 @@ const EXERCISES = [
   { id: 'pushdown', name: 'Cable Pushdown', m: ['triceps'], m2: [],
     eq: ['cable'], lvl: 1, cmp: false, incr: 5,
     cue: 'Elbows glued to your sides, push the bar down until arms are straight, control the way up.' },
+  { id: 'machine-triceps-press', name: 'Machine Triceps Press', m: ['triceps'], m2: ['chest'],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Sit tall, elbows tucked, press the handles down until your arms are straight. It’s a dip with the wobble removed.' },
   { id: 'oh-ext', name: 'Overhead Dumbbell Extension', m: ['triceps'], m2: [],
     eq: ['dumbbell'], lvl: 1, cmp: false, incr: 5,
     cue: 'Hold one dumbbell with both hands overhead, lower it behind your head, extend back up. Elbows point forward.' },
@@ -215,6 +247,12 @@ const EXERCISES = [
   { id: 'smith-squat', name: 'Smith Machine Squat', m: ['quads'], m2: ['glutes'],
     eq: ['smith'], lvl: 2, cmp: true, incr: 10,
     cue: 'Feet slightly in front of the bar, control the descent to parallel. The rails guide the path for you.' },
+  { id: 'leg-press', name: 'Leg Press', m: ['quads'], m2: ['glutes', 'hamstrings'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 10,
+    cue: 'Feet shoulder-width on the platform. Lower until your knees near your chest without your lower back curling off the pad, then press — don’t slam the lockout.' },
+  { id: 'leg-extension', name: 'Leg Extension', m: ['quads'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Pad on your shins, extend until your legs are straight, pause a beat at the top, lower slowly. Pure quads.' },
   { id: 'step-up', name: 'Dumbbell Step-Up', m: ['quads'], m2: ['glutes'],
     eq: ['dumbbell', 'bench'], lvl: 1, cmp: true, uni: true, incr: 5,
     cue: 'Step onto the bench, drive through the top heel, stand fully tall, lower down slowly. Don’t push off the bottom foot.' },
@@ -241,6 +279,9 @@ const EXERCISES = [
   { id: 'bb-rdl', name: 'Barbell Romanian Deadlift', m: ['hamstrings'], m2: ['glutes', 'back'],
     eq: ['barbell'], lvl: 2, cmp: true, incr: 10,
     cue: 'Hips back, back flat, bar stays close to your legs. Feel the stretch, then drive hips forward to stand.' },
+  { id: 'seated-leg-curl', name: 'Seated Leg Curl', m: ['hamstrings'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Thigh pad snug, curl your heels under the seat as far as they’ll go, then resist the weight all the way back up.' },
   { id: 'sl-rdl', name: 'Single-Leg Dumbbell RDL', m: ['hamstrings'], m2: ['glutes', 'core'],
     eq: ['dumbbell'], lvl: 2, cmp: true, uni: true, incr: 5,
     cue: 'Balance on one leg, hinge forward as the other leg floats back. Wobbling is normal — it’s the point.' },

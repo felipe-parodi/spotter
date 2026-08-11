@@ -426,6 +426,68 @@ const INSTRUCTIONS = {
 "Keeping that knee slightly bent, perform a stiff legged deadlift by bending at the hip, extending your free leg behind you for balance.",
 "Continue lowering the kettlebell until you are parallel to the ground, and then return to the upright position."
 ],
+"machine-chest-press": [
+"Load an appropriate weight onto the pins and adjust the seat for your height. The handles should be near the bottom or middle of the pectorals at the beginning of the motion.",
+"Your chest and head should be up and your shoulder blades retracted. This will be your starting position.",
+"Press the handles forward by extending through the elbow.",
+"After a brief pause at the top, return the weight just above the start position, keeping tension on the muscles by not returning the weight to the stops until the set is complete."
+],
+"pec-deck": [
+"Sit on the machine with your back flat on the pad.",
+"Take hold of the handles. Tip: Your upper arms should be positioned parallel to the floor; adjust the machine accordingly. This will be your starting position.",
+"Push the handles together slowly as you squeeze your chest in the middle. Breathe out during this part of the motion and hold the contraction for a second.",
+"Return back to the starting position slowly as you inhale until your chest muscles are fully stretched.",
+"Repeat for the recommended amount of repetitions."
+],
+"machine-row": [
+"Load an appropriate weight onto the pins and adjust the seat height so that the handles are at chest level. Grasp the handles with either a neutral or pronated grip. This will be your starting position.",
+"Pull the handles towards your torso, retracting your shoulder blades as you flex the elbow.",
+"Pause at the bottom of the motion, and then slowly return the handles to the starting position. For multiple repetitions, avoid completely returning the weight to the stops to keep tension on the muscles being worked."
+],
+"machine-shoulder-press": [
+"Load an appropriate weight onto the pins and adjust the seat for your height. The handles should be near the top of the shoulders at the beginning of the motion. Your chest and head should be up and handles held with a pronated grip. This will be your starting position.",
+"Press the handles upward by extending through the elbow.",
+"After a brief pause at the top, return the weight to just above the start position, keeping tension on the muscles by not returning the weight to the stops until the set is complete."
+],
+"machine-rear-fly": [
+"Adjust the handles so that they are fully to the rear. Make an appropriate weight selection and adjust the seat height so the handles are at shoulder level. Grasp the handles with your hands facing inwards. This will be your starting position.",
+"In a semicircular motion, pull your hands out to your side and back, contracting your rear delts.",
+"Keep your arms slightly bent throughout the movement, with all of the motion occurring at the shoulder joint.",
+"Pause at the rear of the movement, and slowly return the weight to the starting position."
+],
+"machine-curl": [
+"Adjust the seat to the appropriate height and make your weight selection. Place your upper arms against the pads and grasp the handles. This will be your starting position.",
+"Perform the movement by flexing the elbow, pulling your lower arm towards your upper arm.",
+"Pause at the top of the movement, and then slowly return the weight to the starting position.",
+"Avoid returning the weight all the way to the stops until the set is complete to keep tension on the muscles being worked."
+],
+"machine-triceps-press": [
+"Sit securely in a dip machine, select the weight and firmly grasp the handles.",
+"Now keep your elbows in at your sides in order to place emphasis on the triceps. The elbows should be bent at a 90 degree angle.",
+"As you contract the triceps, extend your arms downwards as you exhale. Tip: At the bottom of the movement, focus on keeping a little bend in your arms to keep tension on the triceps muscle.",
+"Now slowly let your arms come back up to the starting position as you inhale.",
+"Repeat for the recommended amount of repetitions."
+],
+"leg-press": [
+"Using a leg press machine, sit down on the machine and place your legs on the platform directly in front of you at a medium (shoulder width) foot stance. (Note: For the purposes of this discussion we will use the medium stance described above which targets overall development; however you can choose any of the three stances described in the foot positioning section).",
+"Lower the safety bars holding the weighted platform in place and press the platform all the way up until your legs are fully extended in front of you. Tip: Make sure that you do not lock your knees. Your torso and the legs should make a perfect 90-degree angle. This will be your starting position.",
+"As you inhale, slowly lower the platform until your upper and lower legs make a 90-degree angle.",
+"Pushing mainly with the heels of your feet and using the quadriceps go back to the starting position as you exhale.",
+"Repeat for the recommended amount of repetitions and ensure to lock the safety pins properly once you are done. You do not want that platform falling on you fully loaded."
+],
+"leg-extension": [
+"For this exercise you will need to use a leg extension machine. First choose your weight and sit on the machine with your legs under the pad (feet pointed forward) and the hands holding the side bars. This will be your starting position. Tip: You will need to adjust the pad so that it falls on top of your lower leg (just above your feet). Also, make sure that your legs form a 90-degree angle between the lower and upper leg. If the angle is less than 90-degrees then that means the knee is over the toes which in turn creates undue stress at the knee joint. If the machine is designed that way, either look for another machine or just make sure that when you start executing the exercise you stop going down once you hit the 90-degree angle.",
+"Using your quadriceps, extend your legs to the maximum as you exhale. Ensure that the rest of the body remains stationary on the seat. Pause a second on the contracted position.",
+"Slowly lower the weight back to the original position as you inhale, ensuring that you do not go past the 90-degree angle limit.",
+"Repeat for the recommended amount of times."
+],
+"seated-leg-curl": [
+"Adjust the machine lever to fit your height and sit on the machine with your back against the back support pad.",
+"Place the back of lower leg on top of padded lever (just a few inches under the calves) and secure the lap pad against your thighs, just above the knees. Then grasp the side handles on the machine as you point your toes straight (or you can also use any of the other two stances) and ensure that the legs are fully straight right in front of you. This will be your starting position.",
+"As you exhale, pull the machine lever as far as possible to the back of your thighs by flexing at the knees. Keep your torso stationary at all times. Hold the contracted position for a second.",
+"Slowly return to the starting position as you breathe in.",
+"Repeat for the recommended amount of repetitions."
+],
 "treadmill-run": [
 "To begin, step onto the treadmill and select the desired option from the menu. Most treadmills have a manual setting, or you can select a program to run. Typically, you can enter your age and weight to estimate the amount of calories burned during exercise. Elevation can be adjusted to change the intensity of the workout.",
 "Treadmills offer convenience, cardiovascular benefits, and usually have less impact than running outside. A 150 lb person will burn over 450 calories running 8 miles per hour for 30 minutes. Maintain proper posture as you run, and only hold onto the handles when necessary, such as when dismounting or checking your heart rate."

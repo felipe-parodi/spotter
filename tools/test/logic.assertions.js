@@ -114,7 +114,14 @@ assert(viewTrend().includes('Longest session'), 'cardio trend caption reads "Lon
 
 // --- picker ---
 S._picker = { q: '' };
-assert(pickerHTML().includes('Tabata'), 'picker lists HIIT blocks');
+{
+  const hadActive = S.active;
+  S.active = { ex: [], groups: ['freestyle'], minutes: 45 };
+  assert(pickerHTML().includes('Tabata'), 'picker lists HIIT blocks mid-session');
+  S.active = null;
+  assert(!pickerHTML().includes('Tabata'), 'no HIIT rows while editing a draft (they start a live session)');
+  S.active = hadActive;
+}
 S._picker = { q: 'tread' };
 assert(pickerHTML().includes('Treadmill Run'), 'picker finds cardio');
 S._picker = null;
@@ -887,6 +894,137 @@ function rbTrack(pattern, region) {
 
   delete S.profile.heightCm;
   S.tests = savedTests; testRun = null; route = 'today';
+}
+
+// --- machine space, cable downweight, custom migration ---
+{
+  assert(S.settings.equipment.machine === true, 'machine equipment defaults on');
+  ['machine-chest-press', 'machine-row', 'machine-shoulder-press', 'machine-curl',
+   'machine-triceps-press', 'leg-press', 'leg-extension', 'seated-leg-curl',
+   'pec-deck', 'machine-rear-fly'].forEach(id =>
+    assert(!!findEx(id), 'machine exercise in db: ' + id));
+
+  assert(spaceOf(findEx('machine-chest-press')) === 'machines', 'machine exercise → machines space');
+  assert(spaceOf(findEx('lat-pulldown')) === 'machines', 'cable exercise → machines space');
+  assert(spaceOf(findEx('db-bench')) === 'free', 'dumbbell exercise → free space');
+  assert(spaceOf(findEx('pushup')) === null, 'bodyweight exercise is space-neutral');
+
+  // cables lose head-to-head picks when a same-muscle alternative is fresh
+  let cablePicks = 0;
+  for (let i = 0; i < 30; i++) {
+    const e = pickExercise('back', new Set(), new Map(), true);
+    if (e.eq.includes('cable')) cablePicks++;
+  }
+  assert(cablePicks === 0, 'cable never beats a fresh same-muscle alternative (' + cablePicks + '/30)');
+
+  // soft space balance: full-body plans draw from both sides of the gym floor
+  let mixed = 0;
+  for (let i = 0; i < 20; i++) {
+    const p = generateWorkout(['full'], 60);
+    const spaces = new Set(p.ex.map(e => spaceOf(findEx(e.id) || { eq: [] })).filter(Boolean));
+    if (spaces.size === 2) mixed++;
+  }
+  assert(mixed >= 15, 'most full-body plans mix free + machine spaces (' + mixed + '/20)');
+
+  // graded recency: last session penalised, older sessions less so
+  const ages = (() => {
+    const saved = S.history;
+    S.history = [
+      { exercises: [{ id: 'db-bench' }] },
+      { exercises: [{ id: 'goblet-squat' }] },
+      { exercises: [{ id: 'db-bench' }, { id: 'lat-raise' }] },
+    ];
+    const m = recentExerciseAges(4);
+    S.history = saved;
+    return m;
+  })();
+  assert(ages.get('db-bench') === 0 && ages.get('goblet-squat') === 1 && ages.get('lat-raise') === 2,
+    'recentExerciseAges keeps the freshest sighting per exercise');
+
+  // customs named like machines fold into the built-ins, history intact
+  const savedRaw = localStorage.getItem(LS_KEY);
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    profile: { name: 'T', level: 'experienced', goal: 'muscle', units: 'lb', sex: 'na', bodyweight: 150 },
+    custom: [
+      { id: 'c-tr-ceps-extension-a0or', name: 'Tríceps extension', m: ['custom'], eq: [], custom: true, mode: 'reps', incr: 5 },
+      { id: 'c-my-thing-zz', name: 'My weird thing', m: ['custom'], eq: [], custom: true, mode: 'reps', incr: 5 },
+    ],
+    history: [{ date: new Date().toISOString(), exercises: [
+      { id: 'c-tr-ceps-extension-a0or', name: 'Tríceps extension', sets: [{ w: 40, r: 10 }] },
+    ] }],
+  }));
+  const mig = loadState();
+  assert(mig.custom.length === 1 && mig.custom[0].id === 'c-my-thing-zz',
+    'machine-named custom removed, unrelated custom kept');
+  assert(mig.history[0].exercises[0].id === 'machine-triceps-press',
+    'history id remapped to built-in');
+  assert(mig.history[0].exercises[0].name === 'Machine Triceps Press',
+    'history name standardised');
+  assert(mig.history[0].exercises[0].sets[0].w === 40, 'logged sets untouched by migration');
+  localStorage.setItem(LS_KEY, savedRaw);
+}
+
+// --- sheets pin to the visual viewport while the keyboard is up ---
+{
+  const qsAll = document.querySelectorAll;
+  const ovStyle = {}, shStyle = {};
+  document.querySelectorAll = sel => sel === '.overlay'
+    ? [{ style: ovStyle, querySelector: () => ({ style: shStyle }) }] : qsAll(sel);
+  window.visualViewport = { height: 500, offsetTop: 0, addEventListener() {} };
+  window.innerHeight = 900;
+  fitSheets();
+  assert(ovStyle.height === '500px' && ovStyle.top === '0px' && shStyle.maxHeight === '492px',
+    'sheet pinned above the keyboard (' + ovStyle.height + ', ' + shStyle.maxHeight + ')');
+  window.visualViewport.height = 900;
+  fitSheets();
+  assert(ovStyle.height === '' && shStyle.maxHeight === '',
+    'sheet styles reset when the keyboard closes');
+  delete window.visualViewport; delete window.innerHeight;
+  document.querySelectorAll = qsAll;
+}
+
+// --- rest timer: keyed to sets remaining, not list position ---
+{
+  const prevActive = S.active, prevRoute = route;
+  const mkEx = id => ({ id, name: id, mode: 'reps', reps: [8, 12], rest: 90, sets: 2,
+    eqLabel: 'Machine', log: [{ w: null, r: null, done: false }, { w: null, r: null, done: false }] });
+  S.active = { startedAt: Date.now(), groups: ['freestyle'], minutes: 45, ex: [mkEx('a'), mkEx('b')] };
+  route = 'workout';
+  stopRest();
+  // doing the LAST-listed exercise first: its final set must still start a rest
+  setDone(1, 0); setDone(1, 1);
+  assert(rest !== null, 'rest runs after list-last exercise when other sets remain');
+  stopRest();
+  // now the truly final set of the session: no rest
+  setDone(0, 0);
+  assert(rest !== null, 'rest runs mid-exercise as before');
+  stopRest();
+  setDone(0, 1);
+  assert(rest === null, 'no rest once every set in the session is done');
+  S.active = prevActive; route = prevRoute;
+}
+
+// --- plan preview editing: add + remove before starting ---
+{
+  const prevActive = S.active, prevDraft = S.draft;
+  S.active = null;
+  S.draft = generateWorkout(['chest'], 45);
+  const n = S.draft.ex.length, estBefore = S.draft.est;
+  addToPlan(findEx('machine-curl'));
+  assert(S.draft.ex.length === n + 1 && S.draft.ex[n].id === 'machine-curl',
+    'picker adds to the draft when no session is live');
+  assert(!S.draft.ex[n].log, 'draft entries stay snapshots (no set log yet)');
+  assert(S.draft.est > estBefore, 'estimate grows after adding (' + estBefore + ' → ' + S.draft.est + ')');
+  removeDraftEx(n);
+  assert(S.draft.ex.length === n, 'removeDraftEx drops the row');
+  assert(S.draft.est === estBefore, 'estimate restored after removing (' + S.draft.est + ')');
+  while (S.draft.ex.length > 1) removeDraftEx(S.draft.ex.length - 1);
+  removeDraftEx(0);
+  assert(S.draft.ex.length === 1, 'the last exercise cannot be removed');
+  startWorkout();
+  assert(S.active && S.active.ex.length === 1 && S.active.ex[0].log.length,
+    'edited draft still starts cleanly');
+  S.active = prevActive; S.draft = prevDraft;
 }
 
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');

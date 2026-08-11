@@ -21,11 +21,15 @@ after install — each phone keeps its own profile and history.
   same history, rests trimmed to a minute because bodyweight work doesn't need
   ninety seconds. Swapping an exercise inside a home plan stays bodyweight, and
   the session is tagged *at home* in your log.
-- Plans are built from a ~90-exercise database (~40 of them bodyweight-only, plus
-  ~40 Rebuild-only movements) — now including **cardio**
+- Plans are built from a ~100-exercise database (~40 of them bodyweight-only, plus
+  ~40 Rebuild-only movements) — including **weight machines** (chest press, leg
+  press, pec deck and friends) and **cardio**
   (treadmill, bike, rower, elliptical, stair climber, jump rope; logged in
   minutes) — filtered by your gym's equipment (toggle what your gym has in
-  **Profile → Gym equipment**). Selecting the Cardio chip appends one cardio
+  **Profile → Gym equipment**). The generator softly balances every plan across
+  the free-weight and machine areas of the floor, so a crowded rack never
+  stalls a session, rotates picks over your last four sessions instead of
+  cycling favourites, and lets cable stations lose ties to less-contested kit. Selecting the Cardio chip appends one cardio
   finisher block to the plan.
 - Beginner vs. experienced modes gate out technical lifts; goal (fitness /
   muscle / strength) sets the rep ranges and rest periods.
@@ -65,8 +69,8 @@ after install — each phone keeps its own profile and history.
   flags for one area in three weeks and Spotter offers to run a Rebuild block —
   which is a much better front door than a menu.
 - Optional **cycle-aware mode** for those who want it (see the science note below).
-- Add exercises mid-workout (search the database or create custom ones — leg
-  press, anything), start a blank freestyle session, or **discard** a session
+- Add exercises mid-workout (search the database or create custom ones for
+  anything your gym has that we don't), start a blank freestyle session, or **discard** a session
   entirely if life happens.
 - History with a read-only **Review** of any past session (same photo cards as
   a live workout) and one-tap **Repeat** that rebuilds it as today's plan with

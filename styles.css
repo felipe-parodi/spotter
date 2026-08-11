@@ -271,6 +271,18 @@ h2 { font-size: 17px; }
   border-bottom: 1px solid var(--line);
 }
 .ex-row:last-child { border-bottom: none; }
+/* swipe-to-remove wrappers on the plan preview: the row slides on top of a
+   red Remove layer. Wrapped rows are each :last-child of their wrapper, so
+   the divider moves up to the wrapper level. */
+.ex-swipe { position: relative; overflow: hidden; touch-action: pan-y; }
+.ex-swipe .ex-row { border-bottom: none; position: relative; z-index: 1; background: var(--surface); transition: transform 0.18s ease; }
+.ex-swipe { border-bottom: 1px solid var(--line); }
+.ex-swipe:last-of-type { border-bottom: none; }
+.ex-del { position: absolute; inset: 0; display: flex; justify-content: flex-end; background: var(--danger); }
+.ex-del .del-btn {
+  border: 0; background: none; width: 88px;
+  color: var(--on-accent); font: 600 14px var(--font);
+}
 .ex-row-main { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .ex-row-main strong { font-family: var(--serif); font-size: 16px; }
 .ex-row-main .muted { font-size: 13px; }
@@ -489,6 +501,7 @@ h2 { font-size: 17px; }
   z-index: 60;
   display: flex;
   align-items: flex-end;
+  overscroll-behavior: contain;
 }
 .sheet {
   background: var(--bg);
@@ -516,7 +529,7 @@ h2 { font-size: 17px; }
   outline: none;
   width: 100%;
 }
-.pick-list { overflow-y: auto; display: flex; flex-direction: column; min-height: 120px; }
+.pick-list { overflow-y: auto; display: flex; flex-direction: column; min-height: 120px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .pick-row {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 2px;

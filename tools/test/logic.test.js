@@ -15,7 +15,7 @@ global.localStorage = {
   removeItem: k => { delete storage[k]; },
 };
 const fakeEl = () => ({
-  style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  style: { setProperty() {} }, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
   dataset: {}, setAttribute() {}, getAttribute() { return null; },
   addEventListener() {}, appendChild() {}, remove() {}, click() {}, focus() {},
   querySelector: () => fakeEl(), querySelectorAll: () => [],
@@ -46,3 +46,30 @@ const code = ['exercise-info.js', 'db.js', 'rehab.js', 'app.js']
   .join('\n');
 const tests = fs.readFileSync(path.join(__dirname, 'logic.assertions.js'), 'utf8');
 eval(code + '\n' + tests);
+
+/* Fresh-boot pass with a machine-named custom already in storage: the custom
+   migration runs inside the very first loadState(), before later module-level
+   bindings exist — if it ever throws there, the catch silently resets ALL
+   state. Boot the app a second time in a clean scope and prove state survives. */
+const vm = require('vm');
+const bootStorage = {
+  'spotter-v1': JSON.stringify({
+    profile: { name: 'T', level: 'experienced', goal: 'muscle', units: 'lb', sex: 'na', bodyweight: 150 },
+    custom: [{ id: 'c-x1', name: 'Tríceps extension', m: ['custom'], eq: [], custom: true, mode: 'reps', incr: 5 }],
+    history: [{ date: new Date().toISOString(), groups: ['freestyle'], goal: 'muscle', minutes: 30, exercises: [{ id: 'c-x1', name: 'Tríceps extension', sets: [{ w: 40, r: 10 }] }] }],
+  }),
+};
+const bootCheck = `__boot(S.profile && S.profile.name, S.history.length && S.history[0].exercises[0].id, S.custom.length);`;
+const ctx = vm.createContext({
+  console, Date, Math, JSON, setInterval: () => {},
+  localStorage: { getItem: k => bootStorage[k] || null, setItem: (k, v) => { bootStorage[k] = v; }, removeItem: k => { delete bootStorage[k]; } },
+  document: global.document, window: global.window, navigator: { onLine: true },
+  confirm: () => true, URL: global.URL, Blob: global.Blob,
+  __boot: (name, firstId, customs) => {
+    const assert = (cond, msg) => { if (!cond) { console.error('FAIL: ' + msg); process.exitCode = 1; } else console.log('ok: ' + msg); };
+    assert(name === 'T', 'fresh boot with customs keeps the profile (' + name + ')');
+    assert(firstId === 'machine-triceps-press', 'fresh boot migrates history id at startup (' + firstId + ')');
+    assert(customs === 0, 'fresh boot retires the migrated custom');
+  },
+});
+vm.runInContext(code + '\n' + bootCheck, ctx);

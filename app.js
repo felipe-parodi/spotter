@@ -51,6 +51,7 @@ function loadState() {
         Object.fromEntries(EQUIPMENT.map(e => [e.id, true])),
         s.settings.equipment || {});
       s.custom = parsed.custom || [];
+      migrateCustoms(s);
       s.notes = parsed.notes || {};
       s.schedule = Object.assign(defaultState().schedule, parsed.schedule || {});
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
@@ -68,6 +69,41 @@ function loadState() {
     }
   } catch (e) { /* corrupted storage falls through to a fresh state */ }
   return defaultState();
+}
+
+/* Customs created back when machines weren't first-class equipment fold into
+   the real exercises (matched by name, accents ignored) so their logged
+   history keeps driving weight suggestions under the new ids. The name map
+   lives inside the function: loadState() runs before module-level consts
+   further down are initialised, and a TDZ throw here would silently reset
+   the whole state via loadState's catch. */
+function migrateCustoms(s) {
+  const CUSTOM_TO_BUILTIN = {
+    'chest press': 'machine-chest-press', 'seated row': 'machine-row',
+    'biceps curl seated': 'machine-curl', 'machine biceps curl': 'machine-curl',
+    'shoulder press machine': 'machine-shoulder-press',
+    'triceps extension': 'machine-triceps-press',
+    'leg extension': 'leg-extension', 'seated leg curl': 'seated-leg-curl',
+  };
+  const norm = n => (n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const idMap = {};
+  s.custom = (s.custom || []).filter(c => {
+    const target = CUSTOM_TO_BUILTIN[norm(c.name)];
+    if (!target || !EXERCISES.some(e => e.id === target)) return true;
+    idMap[c.id] = target;
+    return false;
+  });
+  if (!Object.keys(idMap).length) return;
+  const remap = ex => {
+    const def = idMap[ex.id] && EXERCISES.find(e => e.id === idMap[ex.id]);
+    if (!def) return;
+    ex.id = def.id;
+    ex.name = def.name;
+    if ('cue' in ex) ex.cue = def.cue;
+    if ('eqLabel' in ex) ex.eqLabel = def.eq.map(t => EQ_LABEL[t]).join(' · ');
+  };
+  (s.history || []).forEach(w => (w.exercises || []).forEach(remap));
+  [s.draft, s.active].forEach(p => p && (p.ex || []).forEach(remap));
 }
 
 /* Saves are debounced: serializing a years-long history on every keystroke
@@ -489,6 +525,13 @@ function equipOK(ex) {
   return ex.eq.every(t => t === 'bodyweight' || S.settings.equipment[t]);
 }
 
+/* Which gym-floor space an exercise lives in ('free' | 'machines'), or null
+   for space-neutral work (bodyweight, bands, cardio kit). */
+function spaceOf(ex) {
+  for (const t of ex.eq) if (EQ_SPACE[t]) return EQ_SPACE[t];
+  return null;
+}
+
 function levelOK(ex) {
   return S.profile.level === 'experienced' ? true : ex.lvl <= 2;
 }
@@ -567,10 +610,14 @@ function suggestFor(ex) {
 
 /* ---------------- workout generator ---------------- */
 
-function recentExerciseIds(n) {
-  const ids = new Set();
-  S.history.slice(0, n).forEach(w => (w.exercises || []).forEach(e => ids.add(e.id)));
-  return ids;
+/* How many sessions ago each exercise last appeared (0 = most recent),
+   looking back n sessions. Feeds a graded stale-pick penalty so plans rotate
+   through the pool instead of cycling the same few favourites. */
+function recentExerciseAges(n) {
+  const ages = new Map();
+  S.history.slice(0, n).forEach((w, i) =>
+    (w.exercises || []).forEach(e => { if (!ages.has(e.id)) ages.set(e.id, i); }));
+  return ages;
 }
 
 function assignParams(ex, minutes) {
@@ -608,7 +655,7 @@ function musclesFor(groupIds) {
   return queue;
 }
 
-function pickExercise(muscle, usedIds, recent, preferCompound) {
+function pickExercise(muscle, usedIds, recent, preferCompound, spaceBias) {
   // rehab-only exercises stay out of normal plans until a track graduates them
   const grad = graduatedIdSet();
   const pool = EXERCISES.filter(e =>
@@ -621,7 +668,14 @@ function pickExercise(muscle, usedIds, recent, preferCompound) {
     let score = Math.random() * 6;
     if (preferCompound && e.cmp) score += 12;
     if (!preferCompound && !e.cmp) score += 6;
-    if (recent.has(e.id)) score -= 10;
+    const age = recent.get(e.id);
+    if (age !== undefined) score -= [12, 8, 5, 3][age] || 2;
+    // cables share one crowded tower and mostly duplicate machine/free-weight
+    // movements — let them lose ties, not disappear
+    if (e.eq.includes('cable')) score -= 6;
+    // soft space balance: lean toward whichever side of the gym floor the
+    // plan has fewer picks from, so there's always a free station to move to
+    if (spaceBias && spaceOf(e) === spaceBias) score += 5;
     if ((S.profile.goal === 'muscle' || S.profile.goal === 'strength') && !e.incr) score -= 5;
     if (S.profile.level === 'beginner' && e.lvl === 2) score -= 4;
     if (S.profile.level === 'experienced' && e.lvl === 1) score -= 1;
@@ -647,7 +701,7 @@ function generateWorkout(groupIds, minutes) {
   const budget = minutes - 5; // reserve ~5 min for warm-up
   const queue = musclesFor(groupIds);
   const usedIds = new Set();
-  const recent = recentExerciseIds(2);
+  const recent = recentExerciseAges(4);
   const picked = [];
   let total = 0;
 
@@ -656,7 +710,10 @@ function generateWorkout(groupIds, minutes) {
     if (picked.length >= 8) break;
     const cmpCount = picked.filter(p => p.cmp).length;
     const preferCompound = cmpCount < Math.max(3, Math.ceil((picked.length + 1) * 0.6));
-    const ex = pickExercise(muscle, usedIds, recent, preferCompound && muscle !== 'core' && muscle !== 'cardio');
+    const free = picked.filter(p => spaceOf(p) === 'free').length;
+    const mach = picked.filter(p => spaceOf(p) === 'machines').length;
+    const spaceBias = free === mach ? null : (free < mach ? 'free' : 'machines');
+    const ex = pickExercise(muscle, usedIds, recent, preferCompound && muscle !== 'core' && muscle !== 'cardio', spaceBias);
     if (!ex) continue;
     // cardio joins a strength session as a single finisher block
     if (ex.cardio && picked.some(p => p.cardio) && !cardioOnly) continue;
@@ -693,7 +750,7 @@ function swapExercise(i) {
   if (!orig) return;
   const muscle = orig.m[0];
   const usedIds = new Set(plan.ex.map(e => e.id));
-  const next = withHome(plan.home, () => pickExercise(muscle, usedIds, new Set(), cur.cmp));
+  const next = withHome(plan.home, () => pickExercise(muscle, usedIds, new Map(), cur.cmp));
   if (!next) {
     toast(plan.home ? 'No other bodyweight option for that muscle.' : 'No alternative for this muscle with your equipment.');
     return;
@@ -1206,16 +1263,43 @@ function niggleSuggestion() {
   return { region, side: side || null, n: best, key };
 }
 
-function addToActive(def, opts) {
-  const params = assignParams(def, S.active.minutes || 45);
+/* Adds an exercise to the live session, or — from the preview screen,
+   before anything has started — to the draft plan. */
+function addToPlan(def, opts) {
+  const plan = S.active || S.draft;
+  if (!plan) return;
+  const params = withHome(plan.home, () => assignParams(def, plan.minutes || 45));
   if (opts && opts.sets) params.sets = opts.sets;
   if (opts && def.mode === 'time' && opts.secs) params.reps = [opts.secs, opts.secs];
   const entry = snapshot(def, params);
-  entry.log = Array.from({ length: entry.sets }, () => ({ w: null, r: null, done: false }));
-  entry.suggest = suggestFor(entry);
-  S.active.ex.push(entry);
+  if (S.active) {
+    entry.log = Array.from({ length: entry.sets }, () => ({ w: null, r: null, done: false }));
+    entry.suggest = suggestFor(entry);
+    S.active.ex.push(entry);
+  } else {
+    S.draft.ex.push(entry);
+    S.draft.est = planEst(S.draft);
+  }
   S._picker = null;
   save(); render();
+}
+
+/* Rough plan length recomputed from the snapshots alone (mirrors estMinutes),
+   for when the preview list is edited after generation. */
+function planEst(plan) {
+  const total = plan.ex.reduce((t, e) =>
+    t + (e.cardio ? e.sets * e.reps[0] : e.sets * (0.75 + e.rest / 60)), 0);
+  return Math.round(total + 5);
+}
+
+function removeDraftEx(i) {
+  const d = S.draft;
+  if (!d || !d.ex[i]) return;
+  if (d.ex.length === 1) { toast('That’s the whole plan — swap it instead, or go back.'); render(); return; }
+  const gone = d.ex.splice(i, 1)[0];
+  d.est = planEst(d);
+  save(); render();
+  toast(gone.name + ' removed.');
 }
 
 function setDone(i, j) {
@@ -1227,8 +1311,11 @@ function setDone(i, j) {
     if (s.w == null) { const sw = suggestedW(ex, j); if (sw) { s.w = sw; s.auto = true; } }
     if (s.w != null) autofillWeight(i, j); // ticking a set also settles the ones after it
     if (s.r == null) s.r = ex.reps[1];
-    const isLastSet = i === S.active.ex.length - 1 && j === ex.log.length - 1;
-    if (!isLastSet) startRest(ex.rest, ex.name);
+    // rest after every tick until the whole session is done — "last set" by
+    // list position breaks when exercises are done out of order (floating to
+    // whichever space is free), muting rest mid-session and timing it at the end
+    const allDone = S.active.ex.every(e => e.log.every(x => x.done));
+    if (!allDone) startRest(ex.rest, ex.name);
   }
   save();
   updateWorkoutDOM(i, j);
@@ -2087,6 +2174,7 @@ function render() {
     tests: viewTests, 'test-trend': viewTestTrend,
   };
   app.innerHTML = (views[route] || viewToday)();
+  fitSheets(); // a sheet rendered while the keyboard is up must fit the visible area
 }
 
 function tabbar(current) {
@@ -2357,7 +2445,10 @@ function viewPreview() {
   const d = S.draft;
   if (!d) { route = 'today'; return viewToday(); }
   const goal = GOAL_PARAMS[S.profile.goal] || GOAL_PARAMS.fitness;
+  // each row swipes left to reveal Remove (a long swipe deletes outright);
+  // rehab plans are prescribed, so their rows stay fixed
   const rows = d.ex.map((e, i) => `
+    ${d.rehab ? '' : '<div class="ex-swipe" data-i="' + i + '"><div class="ex-del"><button class="del-btn" data-a="remove-ex" data-i="' + i + '">Remove</button></div>'}
     <div class="ex-row">
       ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.webp" alt="" loading="lazy" decoding="async" data-zoom="' + esc(e.id) + '" data-zname="' + esc(e.name) + '">' : ''}
       <div class="ex-row-main">
@@ -2365,7 +2456,7 @@ function viewPreview() {
         <span class="muted">${setsRepsText(e)}${e.tempo ? ' · ' + esc(tempoText(e.tempo)) : ''}</span>
       </div>
       ${d.rehab ? '' : '<button class="icon-btn" data-a="swap" data-i="' + i + '" title="Swap exercise">⇄</button>'}
-    </div>`).join('');
+    </div>${d.rehab ? '' : '</div>'}`).join('');
   const track = d.rehab ? trackById(d.rehab) : null;
   return `
   <div class="screen">
@@ -2381,11 +2472,13 @@ function viewPreview() {
       ? '<div class="card warm"><strong>Before you start</strong><span class="muted">A few easy minutes to get warm — a walk, a bike, or the first set taken very light. Up to 5 out of 10 during is fine. What matters is how it feels tomorrow morning.</span></div>'
       : d.restorative ? '<div class="card warm"><strong>Restorative session</strong><span class="muted">Easy movement to keep the blood flowing without taxing you. Move slowly, skip anything that doesn’t feel good, and add a gentle walk if you like.</span></div>' : '<div class="card warm"><strong>Warm-up · 5 min</strong><span class="muted">' + esc(warmupFor(d.groups, d.home)) + '</span></div>'}
     <div class="card list">${rows}</div>
+    ${d.rehab ? '' : '<button class="add-ex" data-a="open-picker">＋ Add exercise</button>'}
     <div class="row-btns">
       ${track ? '<button class="btn-ghost" data-a="nav" data-r="rehab">Back</button>' : '<button class="btn-ghost" data-a="regen">Reshuffle</button>'}
       <button class="btn-primary" data-a="start">Start</button>
     </div>
-  </div>`;
+  </div>
+  ${S._picker ? pickerHTML() : ''}`;
 }
 
 /* "3 × 8–12 · rest 1½ min · Dumbbells" — cardio drops the pointless
@@ -2769,7 +2862,9 @@ function pickerHTML() {
         ${HAS_IMG.has(e.id) ? '<img class="thumb" src="img/' + e.id + '-0.webp" alt="" loading="lazy" decoding="async">' : ''}
         <span><strong>${esc(e.name)}</strong><em>${e.custom ? 'custom' : esc(e.m.join(', '))}</em></span>
       </button>`).join('');
-    const hiitRows = HIIT_TEMPLATES
+    // guided HIIT jumps straight into a live session, so it only makes sense
+    // once a workout is running — not while editing a draft plan
+    const hiitRows = !S.active ? '' : HIIT_TEMPLATES
       .filter(t => !q || t.name.toLowerCase().includes(q) || 'hiit'.includes(q))
       .map(t => `
       <button class="pick-row" data-a="hiit-start" data-id="${t.id}">
@@ -2808,7 +2903,7 @@ function createCustom() {
     incr: mode === 'time' ? 0 : 5, cue: '',
   };
   S.custom.push(def);
-  addToActive(def, { sets, secs });
+  addToPlan(def, { sets, secs });
 }
 
 /* ----- summary ----- */
@@ -3826,6 +3921,74 @@ function houseSVG() {
 
 /* ---------------- events ---------------- */
 
+/* Swipe-to-remove on the plan preview: drag a row left to reveal Remove,
+   a long swipe deletes outright. Pointer events cover touch and mouse; the
+   wrapper's touch-action:pan-y keeps vertical scrolling native. */
+let rowSwipe = null, swipedRecently = false;
+document.addEventListener('pointerdown', ev => {
+  if (route !== 'preview') return;
+  const wrap = ev.target.closest('.ex-swipe');
+  // starting anywhere snaps other rows shut
+  document.querySelectorAll('.ex-swipe .ex-row').forEach(r => {
+    if (!wrap || !wrap.contains(r)) r.style.transform = '';
+  });
+  if (!wrap) return;
+  rowSwipe = { wrap, x: ev.clientX, y: ev.clientY, dx: 0, active: false };
+}, { passive: true });
+document.addEventListener('pointermove', ev => {
+  if (!rowSwipe) return;
+  const dx = ev.clientX - rowSwipe.x, dy = ev.clientY - rowSwipe.y;
+  if (!rowSwipe.active) {
+    if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy)) return; // vertical scroll wins
+    rowSwipe.active = true;
+  }
+  rowSwipe.dx = Math.min(0, dx);
+  const row = rowSwipe.wrap.querySelector('.ex-row');
+  row.style.transition = 'none';
+  row.style.transform = 'translateX(' + rowSwipe.dx + 'px)';
+}, { passive: true });
+document.addEventListener('pointerup', () => {
+  if (!rowSwipe) return;
+  const { wrap, dx, active } = rowSwipe;
+  rowSwipe = null;
+  if (!active) return;
+  swipedRecently = true; // eat the click this drag would otherwise fire
+  setTimeout(() => { swipedRecently = false; }, 100);
+  const row = wrap.querySelector('.ex-row');
+  row.style.transition = '';
+  if (dx < -100) { removeDraftEx(+wrap.dataset.i); return; }
+  row.style.transform = dx < -44 ? 'translateX(-88px)' : '';
+});
+document.addEventListener('pointercancel', () => {
+  if (!rowSwipe) return;
+  const row = rowSwipe.wrap.querySelector('.ex-row');
+  row.style.transition = ''; row.style.transform = '';
+  rowSwipe = null;
+});
+document.addEventListener('click', ev => {
+  if (swipedRecently) { ev.stopPropagation(); ev.preventDefault(); }
+}, true);
+
+/* iOS keyboards overlay the page instead of resizing it, so a bottom-anchored
+   sheet — and the picker's search field with it — slides behind the keys the
+   moment you start typing. While any sheet is open, pin its overlay to the
+   visual viewport: the sheet then ends exactly where the keyboard begins. */
+function fitSheets() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.querySelectorAll('.overlay').forEach(ov => {
+    const kb = vv.height < window.innerHeight - 1 || vv.offsetTop > 0;
+    ov.style.top = kb ? vv.offsetTop + 'px' : '';
+    ov.style.height = kb ? vv.height + 'px' : '';
+    const sheet = ov.querySelector('.sheet');
+    if (sheet) sheet.style.maxHeight = kb ? (vv.height - 8) + 'px' : '';
+  });
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', fitSheets);
+  window.visualViewport.addEventListener('scroll', fitSheets);
+}
+
 document.addEventListener('click', ev => {
   const segBtn = ev.target.closest('.seg button');
   if (segBtn) {
@@ -4125,6 +4288,7 @@ document.addEventListener('click', ev => {
 
   else if (a === 'freestyle') startFreestyle();
   else if (a === 'swap') swapExercise(+el.dataset.i);
+  else if (a === 'remove-ex') removeDraftEx(+el.dataset.i);
   else if (a === 'start') startWorkout();
   else if (a === 'set-done') setDone(+el.dataset.i, +el.dataset.j);
   else if (a === 'finish') {
@@ -4219,7 +4383,7 @@ document.addEventListener('click', ev => {
   else if (a === 'create-custom') createCustom();
   else if (a === 'pick-add') {
     const def = findEx(el.dataset.id);
-    if (def) addToActive(def);
+    if (def) addToPlan(def);
   }
 
   else if (a === 'quit') {

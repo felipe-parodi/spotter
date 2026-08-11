@@ -75,6 +75,17 @@ MAPPING = {
     'woodchop': 'Standing Cable Wood Chop',
     'cable-curl': 'Standing Biceps Cable Curl',
     'sl-rdl': 'Kettlebell One-Legged Deadlift',
+    # machine space
+    'machine-chest-press': 'Leverage Chest Press',
+    'pec-deck': 'Butterfly',
+    'machine-row': 'Leverage Iso Row',
+    'machine-shoulder-press': 'Leverage Shoulder Press',
+    'machine-rear-fly': 'Reverse Machine Flyes',
+    'machine-curl': 'Machine Bicep Curl',
+    'machine-triceps-press': 'Dip Machine',
+    'leg-press': 'Leg Press',
+    'leg-extension': 'Leg Extensions',
+    'seated-leg-curl': 'Seated Leg Curl',
     # cardio
     'treadmill-run': 'Running, Treadmill',
     'incline-walk': 'Walking, Treadmill',
@@ -152,6 +163,13 @@ ALT_MAPPING = {
     'side-plank': 'Push Up to Side Plank',
     'russian-twist': 'Plate Twist',
     'cable-crunch': 'Rope Crunch',
+    'machine-chest-press': 'Machine Bench Press',
+    'machine-shoulder-press': 'Machine Shoulder (Military) Press',
+    'machine-row': 'Leverage High Row',
+    'machine-curl': 'Machine Preacher Curls',
+    'leg-press': 'Narrow Stance Leg Press',
+    'leg-extension': 'Single-Leg Leg Extension',
+    'seated-leg-curl': 'Lying Leg Curls',
 }
 
 # hand-written steps for exercises with no catalog match
