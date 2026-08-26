@@ -2877,8 +2877,8 @@ function setShape(exId, n) {
 
 /* The shape to project, best source first: today's per-set prescription from
    suggestFor (it already folds in deloads, easing back, and +increment), then
-   the averaged history, then nothing — which rampWeights reads as "ramp by one
-   increment per set". */
+   the averaged history, then nothing — which rampWeights reads as "hold the
+   base flat". */
 function shapeFor(ex, n) {
   const sw = ex.suggest && ex.suggest.setW;
   if (sw && sw.length && sw[0] > 0) {
@@ -2893,8 +2893,11 @@ function shapeFor(ex, n) {
 }
 
 /* Weights for sets `from`…`from + count - 1`, given `base` on set `from`.
-   Keeps the shape when we know one, otherwise one increment per set. Only the
-   change from `base` snaps to the increment, so an odd base (32.5) stays put. */
+   Keeps the shape when we know one, otherwise mirrors the base: guesses land
+   in history when sets are ticked through unedited, so a ramp is only ever
+   projected from evidence (a prescription or logged sessions), never invented.
+   Only the change from `base` snaps to the increment, so an odd base (32.5)
+   stays put — and a base lighter than the increment is never rounded up. */
 function rampWeights(ex, from, base, count) {
   const step = incrFor(findEx(ex.id) || ex) || 2.5;
   const shape = shapeFor(ex, from + count);
@@ -2903,8 +2906,8 @@ function rampWeights(ex, from, base, count) {
     const i = from + k;
     const v = (shape && shape[from] > 0 && shape[i] != null)
       ? base * (shape[i] / shape[from])
-      : base + k * step;
-    out.push(Math.max(step, Math.round((base + Math.round((v - base) / step) * step) * 2) / 2));
+      : base;
+    out.push(Math.max(Math.min(step, base), Math.round((base + Math.round((v - base) / step) * step) * 2) / 2));
   }
   return out;
 }

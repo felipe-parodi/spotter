@@ -308,15 +308,16 @@ function activeDbBench(rows) {
 S.history = [];
 let rex = activeDbBench(blank(4));
 assert(setShape('db-bench', 4) === null, 'no history → no learned shape');
-assert(rampWeights(rex, 0, 30, 4).join() === '30,35,40,45', 'first time: one increment per set (' + rampWeights(rex, 0, 30, 4).join() + ')');
-assert(rampWeights(rex, 0, 32.5, 3).join() === '32.5,37.5,42.5', 'odd base keeps its offset');
+assert(rampWeights(rex, 0, 30, 4).join() === '30,30,30,30', 'first time: mirror the base, no invented ramp (' + rampWeights(rex, 0, 30, 4).join() + ')');
+assert(rampWeights(rex, 0, 32.5, 3).join() === '32.5,32.5,32.5', 'odd base stays put');
+assert(rampWeights(rex, 0, 2.5, 3).join() === '2.5,2.5,2.5', 'a base lighter than the increment is not rounded up (' + rampWeights(rex, 0, 2.5, 3).join() + ')');
 
 rex.log[0].w = 30;
 autofillWeight(0, 0);
-assert(rex.log.map(s => s.w).join() === '30,35,40,45', 'autofill projects the ramp (' + rex.log.map(s => s.w).join() + ')');
+assert(rex.log.map(s => s.w).join() === '30,30,30,30', 'autofill mirrors the base when no shape is known (' + rex.log.map(s => s.w).join() + ')');
 rex.log[2].w = 50; rex.log[2].auto = false; // typed by hand
 rex.log[0].w = 40; autofillWeight(0, 0);
-assert(rex.log.map(s => s.w).join() === '40,45,50,55', 'a typed weight survives re-projection (' + rex.log.map(s => s.w).join() + ')');
+assert(rex.log.map(s => s.w).join() === '40,40,50,40', 'a typed weight survives re-projection (' + rex.log.map(s => s.w).join() + ')');
 
 // today's per-set prescription is the shape to keep: typing a heavier set 1
 // scales the whole ramp instead of flattening it or filling nothing
