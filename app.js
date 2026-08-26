@@ -593,8 +593,14 @@ function suggestFor(ex) {
     return { w: null, note: step ? 'First time: pick a weight that leaves 2–3 reps in the tank.' : null, up: false };
   }
   const detail = perf.sets.map(s => s.r).filter(Boolean).join(', ');
+  /* Ramped sessions list every set — the top weight alone would claim sets
+     that were actually lighter (45, 75, 100 ≠ "100 × 8, 8, 8"). */
+  const ws = perf.sets.map(s => s.w).filter(x => typeof x === 'number' && x > 0);
+  const ramped = ws.some(w => w !== ws[0]);
   const lastTxt = perf.topW
-    ? 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + (detail ? ' × ' + detail : '')
+    ? (ramped
+      ? 'Last: ' + perf.sets.map(s => ((typeof s.w === 'number' && s.w > 0) ? fmtW(s.w) : 'BW') + '×' + (s.r || '—')).join(', ') + ' ' + unitLabel()
+      : 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + (detail ? ' × ' + detail : ''))
     : (detail ? 'Last: ' + detail + timeUnit(ex) : null);
   const adj = w => ease < 1 ? roundW(w * ease) : w;
   const mirror = fallback => perf.sets.map(s => (typeof s.w === 'number' && s.w > 0) ? adj(s.w) : fallback);

@@ -277,6 +277,12 @@ S.history = [perfEntry(2, [{ w: 95, r: 10 }, { w: 105, r: 10 }, { w: 115, r: 9 }
 sg = sugFor();
 assert(sg.w === 115 && sg.setW && sg.setW.join(',') === '95,105,115', 'per-set ramp mirrored (' + (sg.setW || []).join(',') + ')');
 
+// "Last:" line — a ramp lists every set instead of claiming top weight × all reps
+assert(sg.note.includes('Last: 95×10, 105×10, 115×9'), 'ramped last session lists per-set pairs (' + sg.note + ')');
+S.history = [perfEntry(2, [{ w: 100, r: 10 }, { w: 100, r: 9 }])];
+sg = sugFor();
+assert(/Last: 100 lb × 10, 9/.test(sg.note), 'uniform weight keeps the compact form (' + sg.note + ')');
+
 // per-set progression when every target hit
 S.history = [perfEntry(2, [{ w: 95, r: 12 }, { w: 105, r: 12 }, { w: 115, r: 12 }])];
 sg = sugFor();
