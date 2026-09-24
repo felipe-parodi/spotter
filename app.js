@@ -62,6 +62,7 @@ function loadState() {
       s.bodyLog = parsed.bodyLog || [];
       s.tests = parsed.tests || [];
       s.dayLog = parsed.dayLog || {};
+      migrateWorkoutTimes(s);
       delete s.lastSummary; // older versions persisted a copy of history[0]
       // seed the log from an existing single bodyweight so the trend has a start point
       if (!s.bodyLog.length && s.profile && s.profile.bodyweight > 0) {
@@ -108,6 +109,26 @@ function migrateCustoms(s) {
   [s.draft, s.active].forEach(p => p && (p.ex || []).forEach(remap));
 }
 
+/* History dates are finish-button timestamps. Preserve estimated historical starts. */
+function newWorkoutId() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'workout-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+}
+function migrateWorkoutTimes(state) {
+  const seen = {};
+  (state.history || []).forEach(w => {
+    const key = String(new Date(w.date).getTime());
+    if (!Number.isFinite(Number(key))) return; // preserve malformed legacy rows for explicit recovery
+    const n = seen[key] || 0; seen[key] = n + 1;
+    if (!w.id) w.id = 'legacy-' + key + '-' + n;
+    if (!w.endedAt) w.endedAt = new Date(w.date).toISOString();
+    if (!w.startedAt) {
+      w.startedAt = new Date(new Date(w.endedAt).getTime() - Number(w.minutes || 0) * 60000).toISOString();
+      w.timingQuality = 'estimated-start';
+    }
+  });
+  state.schemaVersion = 2;
+}
+
 /* Saves are debounced: serializing a years-long history on every keystroke
    is wasted work. saveNow() is for moments that must not be lost (finishing
    a session), and any pending write is flushed when the app is backgrounded. */
@@ -121,7 +142,9 @@ function save() {
 function saveNow() {
   clearTimeout(saveTimer);
   saveTimer = null;
+  migrateWorkoutTimes(S);
   localStorage.setItem(LS_KEY, JSON.stringify(S));
+  if (window.SpotterSync) window.SpotterSync.changed();
 }
 
 function cancelSave() { clearTimeout(saveTimer); saveTimer = null; }
@@ -1096,7 +1119,7 @@ let lastFinished = null; // the just-finished session, for cooldown/summary
 function startWorkout() {
   if (!S.draft) return;
   S.active = Object.assign({}, S.draft, {
-    startedAt: Date.now(),
+    id: newWorkoutId(), startedAt: Date.now(),
     // rehab sessions carry their own "before you start" ritual
     warmup: S.draft.rehab ? undefined : { done: false },
     ex: S.draft.ex.map(e => Object.assign({}, e, {
@@ -1110,7 +1133,7 @@ function startWorkout() {
 
 function startFreestyle() {
   S.active = {
-    startedAt: Date.now(), groups: ['freestyle'], minutes: 45, est: 0,
+    id: newWorkoutId(), startedAt: Date.now(), groups: ['freestyle'], minutes: 45, est: 0,
     warmup: { done: false }, ex: [],
   };
   S._picker = { q: '' };
@@ -1411,6 +1434,7 @@ function setDone(i, j) {
   const ex = S.active.ex[i];
   const s = ex.log[j];
   s.done = !s.done;
+  if (s.done) s.completedAt = todayISO(); else delete s.completedAt;
   if (s.done) {
     if (navigator.vibrate) navigator.vibrate(10); // tactile tick
     if (s.w == null) { const sw = suggestedW(ex, j); if (sw) { s.w = sw; s.auto = true; } }
@@ -1472,8 +1496,13 @@ function finishWorkout(force) {
     if (!confirm('No sets logged — discard this session?')) return;
     S.active = null; stopRest(); stopTempo(); releaseWakeLock(); save(); go('today'); return;
   }
+  const endedAt = todayISO();
   const entry = {
-    date: todayISO(),
+    id: a.id || newWorkoutId(),
+    startedAt: new Date(a.startedAt).toISOString(), endedAt,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timingQuality: "recorded",
+    date: endedAt,
     groups: a.groups,
     home: a.home || undefined,
     goal: S.profile.goal,
@@ -1482,7 +1511,7 @@ function finishWorkout(force) {
       id: e.id, name: e.name, mode: e.mode, uni: e.uni,
       cardio: e.cardio || undefined, hiit: e.hiit || undefined,
       targetReps: e.reps,
-      sets: e.log.filter(s => s.done).map(s => ({ w: s.w, r: s.r })),
+      sets: e.log.filter(s => s.done).map(s => ({ w: s.w, r: s.r, completedAt: s.completedAt || undefined })),
     })).filter(e => e.sets.length),
   };
   entry.volume = entry.exercises.reduce((v, e) =>
@@ -1721,7 +1750,7 @@ function finishHiit(early) {
     id: 'hiit-' + tpl.id, name: tpl.name, cue: '', cmp: false, uni: false,
     mode: 'time', hiit: true, eqLabel: 'HIIT block',
     sets: 1, reps: [mins, mins], rest: 0,
-    log: [{ w: null, r: mins, done: true }],
+    log: [{ w: null, r: mins, done: true, completedAt: todayISO() }],
   });
   save();
   beep();
@@ -4002,7 +4031,7 @@ function viewProfile() {
     </section>
     <section class="card">
       <h2>Data</h2>
-      <p class="muted small">Everything lives on this phone. Export a backup now and then.</p>
+      <p class="muted small">Your data stays available offline. Export a copy or connect private backup below.</p>
       <div class="row-btns">
         <button class="btn-ghost" data-a="export">Export</button>
         <button class="btn-ghost" data-a="import">Import</button>
@@ -4010,6 +4039,7 @@ function viewProfile() {
       <input type="file" id="import-file" accept=".json,application/json" hidden>
       <button class="btn-danger" data-a="reset">Erase everything</button>
     </section>
+    ${window.SpotterSync ? window.SpotterSync.panel() : ""}
     <p class="fine">Spotter · works offline · demo photos from the public-domain free-exercise-db</p>
   </div>
   ${tabbar('profile')}`;
@@ -4794,6 +4824,7 @@ function unsavedSessions() {
 
 /* Show the gentle backup nudge when online with enough new, unsaved sessions. */
 function backupDue() {
+  if (window.SpotterSync && window.SpotterSync.isSynced()) return 0;
   if (S._snoozeBackup) return 0;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return 0;
   const n = unsavedSessions();
@@ -4889,3 +4920,8 @@ applyTheme();
 route = S.profile ? (S.active ? 'workout' : 'today') : 'onboard';
 render();
 if (S.active) acquireWakeLock();
+
+if (window.SpotterSync) window.SpotterSync.init(() => S, state => {
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  S = loadState(); saveNow(); render();
+});

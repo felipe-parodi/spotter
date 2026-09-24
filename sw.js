@@ -11,7 +11,7 @@
 
 importScripts('./precache-manifest.js');
 
-const VERSION = 'v3.11.1';
+const VERSION = 'v3.12.0';
 const SHELL_CACHE = 'spotter-shell-' + VERSION;
 const IMG_CACHE = 'spotter-img-v1';
 
@@ -20,6 +20,7 @@ const SHELL_ASSETS = [
   './index.html',
   './styles.css',
   './app.js',
+  './sync.js',
   './db.js',
   './rehab.js',
   './precache-manifest.js',
