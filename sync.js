@@ -77,7 +77,7 @@
       config = {...result, bootstrap:true, ack:null, pending:null};
       persist();
       await sync();
-    } catch (_) { status('Could not connect. Check Tailscale and use a fresh pairing link.'); alert(message); }
+    } catch (_) { status('Could not connect. Check Tailscale, allow local network access if your browser asks, and use a fresh pairing link.'); alert(message); }
   }
   async function loadServer() {
     if (busy) { alert('Wait for the current sync to finish.'); return; }
