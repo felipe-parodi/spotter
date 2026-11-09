@@ -1333,3 +1333,9 @@ details.more > summary::after { content: ' ▾'; }
 details.more[open] > summary::after { content: ' ▴'; }
 details.more[open] > .card, details.more[open] > .btn-ghost, details.more[open] > .row-btns { margin-bottom: 10px; }
 .linkish { color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---------------- private backup panel ---------------- */
+.sync-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sync-btns > button { width: 100%; }
+.sync-links { margin: 0; font-size: 13.5px; color: var(--muted); text-align: center; }
+.linkish.danger { color: var(--danger); }

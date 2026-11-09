@@ -76,6 +76,7 @@
       const result = await request('/api/pair/redeem',{code});
       config = {...result, bootstrap:true, ack:null, pending:null};
       persist();
+      rerender();
       await sync();
     } catch (_) { status('Could not connect. Check Tailscale, allow local network access if your browser asks, and use a fresh pairing link.'); alert(message); }
   }
@@ -93,12 +94,19 @@
       persist(); replaceState(result.state); schedule();
     } catch (_) { alert('Could not load server copy. Your phone data is unchanged.'); }
   }
+  const rerender = () => { if (typeof render === 'function') render(); };
   const escape = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   window.SpotterSync = {
     changed() { if (config?.token) { status(config.conflict ? 'Different server copy · review before syncing' : 'Saved on phone · sync pending'); schedule(); } },
     isSynced() { return !!config?.token && !config.pending && !config.conflict && getState && serialized() === config.ack; },
     panel() {
-      return `<section class="card"><h2>Private backup</h2><p class="muted small" data-sync-status>${escape(message)}</p><div class="row-btns"><button class="btn-ghost" data-health-sync="pair">${config?.token ? 'Reconnect' : 'Connect backup'}</button>${config?.token ? '<button class="btn-ghost" data-health-sync="sync">Sync now</button><button class="btn-ghost" data-health-sync="restore">Load server copy</button><button class="btn-ghost" data-health-sync="disconnect">Disconnect</button>' : ''}</div><p class="fine">Pair from Training in your private Portal. Offline changes wait safely on this phone.</p></section>`;
+      // connected: two real buttons, rare/destructive actions as quiet links —
+      // four pill buttons in one row ran off a phone screen
+      const body = config?.token
+        ? `<div class="sync-btns"><button class="btn-primary sm" data-health-sync="sync">Sync now</button><button class="btn-ghost sm" data-health-sync="pair">Reconnect</button></div>
+           <p class="sync-links"><button class="linkish" data-health-sync="restore">Load server copy</button> · <button class="linkish danger" data-health-sync="disconnect">Disconnect</button></p>`
+        : `<button class="btn-ghost wide" data-health-sync="pair">Connect backup</button>`;
+      return `<section class="card sync-card"><h2>Private backup</h2><p class="muted small" data-sync-status>${escape(message)}</p>${body}<p class="fine">Pair from Training in your private Portal. Offline changes wait safely on this phone.</p></section>`;
     },
     init(getter, setter) {
       getState = getter; replaceState = setter;
@@ -111,10 +119,14 @@
   document.addEventListener('click', event => {
     const action = event.target.closest('[data-health-sync]')?.dataset.healthSync;
     if (action === 'pair') { const value = prompt('Paste the pairing link or code from your private Training page:'); if (value) pair(value); }
-    if (action === 'sync') sync();
+    if (action === 'sync') {
+      if (config?.conflict) status('Different server copy · tap “Load server copy” to reconcile');
+      else if (busy) status('Syncing…');
+      else { status('Syncing…'); sync(); }
+    }
     if (action === 'restore') loadServer();
     if (action === 'disconnect' && confirm('Disconnect automatic backup on this device? Phone and server records will be kept.')) {
-      config = null; localStorage.removeItem(key); clearTimeout(timer); status('Disconnected');
+      config = null; localStorage.removeItem(key); clearTimeout(timer); status('Disconnected'); rerender();
     }
   });
   window.addEventListener('online',()=>schedule(200));

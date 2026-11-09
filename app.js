@@ -5213,16 +5213,31 @@ document.addEventListener('change', ev => {
 /* ---------------- service worker & updates ---------------- */
 
 if ('serviceWorker' in navigator) {
+  /* A new version is installed and waiting. Outside a workout (and past
+     onboarding) just take it — the reload is instant from cache. Mid-session
+     it asks instead, so a set grid never vanishes under your thumb. */
+  const offerUpdate = nw => {
+    if (!nw || !navigator.serviceWorker.controller) return; // first install: nothing to replace
+    if (!S.active && route !== 'onboard' && route !== 'workout') { nw.postMessage({ type: 'SKIP_WAITING' }); return; }
+    toast('Update ready', 'Reload', () => nw.postMessage({ type: 'SKIP_WAITING' }));
+  };
   navigator.serviceWorker.register('./sw.js').then(reg => {
+    // installed on an earlier launch but never activated — home-screen apps
+    // are rarely fully closed, so without this the update waits forever
+    if (reg.waiting) offerUpdate(reg.waiting);
+    setTimeout(() => { if (reg.waiting) offerUpdate(reg.waiting); }, 4000); // belt and braces: a waiting worker can surface just after register resolves
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
       nw.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-          toast('Update ready', 'Reload', () => {
-            nw.postMessage({ type: 'SKIP_WAITING' });
-          });
-        }
+        if (nw.state === 'installed') offerUpdate(nw);
       });
+    });
+    // phones resume the app from memory instead of relaunching it, which
+    // skips the browser's own update check — so check on every return
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (reg.waiting) offerUpdate(reg.waiting);
+      reg.update().catch(() => {});
     });
   }).catch(() => { /* e.g. plain-HTTP LAN preview — app still works, just no offline cache */ });
 
