@@ -5,6 +5,24 @@ after install — each phone keeps its own profile and history.
 
 **What it does**
 
+- **The program** (Profile → Training → *Follow the program*): open the app,
+  press Start, do what it says. A fixed machine-first upper/lower rotation —
+  Upper A · Lower A · Upper B · Lower B — run as a **queue, not a calendar**:
+  whatever day you show up, you do the next one, so a missed Tuesday never
+  leaves you behind. Main lift 3 × 6–10, everything else 2 sets to failure
+  (8–12; calves/abs/abduction 10–15). Progression is double progression on the
+  working weight only — every working set at the top of the range adds an
+  increment, otherwise hold and beat the reps; pyramided ramp-up sets don't
+  count against you. Starts at **3 lifts a week**; three straight weeks of 3
+  and Today offers a fourth. Today collapses to one card (next day, exercises,
+  Start), the daily walk, and a lifts/walks scoreboard with a 12-week strip;
+  everything else sits behind *Something else*. Program days skip the plan
+  preview, warm-up check-off and cool-down. Turning it on also turns on
+  *Prefer machines* and the daily walk.
+- **Prefer machines** — ranks selectorized machines above rack/barbell work
+  (racks crowd; machines sit open) instead of balancing the two.
+- **Daily incline walk** — a zone-2 incline treadmill block (20/30/45 min)
+  appended to every lift, and a one-tap check-off on Today otherwise.
 - Pick muscle groups (e.g. *Back + Legs*) and a duration (30/45/60 min) → get a
   balanced plan with specific sets, reps, rest times, a form cue, and start/end
   demo photos per exercise. Tap any photo for a fullscreen lightbox with

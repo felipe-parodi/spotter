@@ -1301,3 +1301,35 @@ h2 { font-size: 17px; }
 .icon-btn.niggle:active { opacity: 1; }
 
 .card.warm.rb { border-left-color: var(--accent); }
+
+/* ---------------- daily walk card ---------------- */
+.card.walk { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+.card.walk > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.card.walk.done { box-shadow: none; padding: 12px 17px; }
+.btn-primary.sm, .btn-ghost.sm { flex: none; padding: 10px 14px; font-size: 14px; white-space: nowrap; }
+.switch-row em { font-style: normal; }
+
+/* ---------------- program Today ---------------- */
+.card.hero { gap: 8px; border-left: 3px solid var(--accent); }
+.card.hero p { margin: 0; }
+.hero-title { font-size: 34px; line-height: 1.05; letter-spacing: -0.02em; margin: 2px 0 2px; }
+.card.hero .btn-primary, .card.hero .btn-ghost { margin-top: 8px; }
+.card.score { gap: 12px; }
+.score-row { display: flex; gap: 28px; }
+.score-row > div { display: flex; flex-direction: column; }
+.score-row strong { font-size: 24px; letter-spacing: -0.02em; }
+.lift-strip { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 28px; align-items: end; }
+.lift-strip .lw { height: calc(4px + 24px * var(--h)); border-radius: 4px; background: var(--sunken); }
+.lift-strip .lw.some { background: color-mix(in srgb, var(--accent) 40%, var(--sunken)); }
+.lift-strip .lw.hit { background: var(--accent); }
+.lift-strip .lw.now { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+details.more { display: flex; flex-direction: column; gap: 10px; }
+details.more > summary {
+  list-style: none; cursor: pointer; text-align: center; padding: 12px;
+  color: var(--muted); font-weight: 800; font-size: 14px;
+}
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: ' ▾'; }
+details.more[open] > summary::after { content: ' ▴'; }
+details.more[open] > .card, details.more[open] > .btn-ghost, details.more[open] > .row-btns { margin-bottom: 10px; }
+.linkish { color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }

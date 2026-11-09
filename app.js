@@ -14,7 +14,11 @@ function defaultState() {
     // profile: {name, level, goal, units, sex:'female'|'male'|'na', theme,
     //           bodyweight:number|null, bodyfat:number|null}
     profile: null,
-    settings: { equipment: Object.fromEntries(EQUIPMENT.map(e => [e.id, true])) },
+    // preferMachines: rank selectorized machines above rack/barbell work (racks
+    // crowd, machines sit open). walk: a daily zone-2 incline walk, appended
+    // after every lift and its own one-tap card on Today otherwise.
+    settings: { equipment: Object.fromEntries(EQUIPMENT.map(e => [e.id, true])),
+                preferMachines: false, walk: { on: false, minutes: 30 } },
     history: [],   // finished workouts, newest first
     custom: [],    // user-created exercises
     notes: {},     // per-exercise notes: {exId: 'seat height 4'}
@@ -27,6 +31,9 @@ function defaultState() {
     schedule: { enabled: false, minutes: 45, cardioDay: false, variant: 0, days: {} },
     // optional cycle-aware mode (female profiles) — see cycle notes in README
     cycle: { enabled: false, avgLen: 28, periodLen: 5, starts: [], checkins: [] },
+    // the program: a fixed upper/lower rotation run as a queue (see PROGRAM
+    // in db.js). next indexes PROGRAM; perWeek is the lift target (3, earn 4).
+    program: { on: false, perWeek: 3, next: 0, offer4At: null },
     dayLog: {},    // per-day water + journal: {'YYYY-MM-DD': {water: n, note: ''}}
     // Rebuild (rehab mode) — see REHAB-SPEC.md. tracks[] holds one 12-week
     // block per area; niggles[] is the lightweight "this bugged me" log.
@@ -48,6 +55,8 @@ function loadState() {
       const parsed = JSON.parse(raw);
       const s = Object.assign(defaultState(), parsed);
       s.settings = parsed.settings || {};
+      s.settings.walk = Object.assign({ on: false, minutes: 30 }, s.settings.walk || {});
+      s.settings.preferMachines = !!s.settings.preferMachines;
       s.settings.equipment = Object.assign(
         Object.fromEntries(EQUIPMENT.map(e => [e.id, true])),
         s.settings.equipment || {});
@@ -55,6 +64,7 @@ function loadState() {
       migrateCustoms(s);
       s.notes = parsed.notes || {};
       s.schedule = Object.assign(defaultState().schedule, parsed.schedule || {});
+      s.program = Object.assign(defaultState().program, parsed.program || {});
       s.cycle = Object.assign(defaultState().cycle, parsed.cycle || {});
       s.rehab = Object.assign(defaultState().rehab, parsed.rehab || {});
       s.rehab.tracks = s.rehab.tracks || [];
@@ -542,10 +552,32 @@ function localDayKey(d) {
 
 function dayLogGet(k) { return S.dayLog[k || localDayKey()] || { water: 0, note: '' }; }
 
+/* Minutes of zone-2 walking on a local day: a one-tap check-off on Today
+   (dayLog.walk) or a walk block logged inside a session that day. */
+function walkMinutesOn(k) {
+  k = k || localDayKey();
+  let m = dayLogGet(k).walk || 0;
+  for (const w of S.history) {
+    if (localDayKey(new Date(w.date)) !== k) continue;
+    for (const e of w.exercises || [])
+      if (e.id === 'incline-walk') m += e.sets.reduce((x, st) => x + (st.r || 0), 0);
+  }
+  return m;
+}
+
+/* Days in the last n (today included) that hit the walk target. */
+function walkDays(n) {
+  const goal = Math.round(S.settings.walk.minutes * 0.8);
+  let c = 0;
+  for (let i = 0; i < n; i++) if (walkMinutesOn(localDayKey(new Date(Date.now() - i * DAY_MS))) >= goal) c++;
+  return c;
+}
+
 function dayLogSet(patch) {
   const k = localDayKey();
   S.dayLog[k] = Object.assign({ water: 0, note: '' }, S.dayLog[k], patch);
-  if (!S.dayLog[k].water && !S.dayLog[k].note) delete S.dayLog[k]; // empty days don't accumulate
+  if (!S.dayLog[k].walk) delete S.dayLog[k].walk;
+  if (!S.dayLog[k].water && !S.dayLog[k].note && !S.dayLog[k].walk) delete S.dayLog[k]; // empty days don't accumulate
   save();
 }
 
@@ -570,6 +602,10 @@ function equipOK(ex) {
 
 /* Which gym-floor space an exercise lives in ('free' | 'machines'), or null
    for space-neutral work (bodyweight, bands, cardio kit). */
+function machineFirst() {
+  return !homeOnly && !!((S.settings && S.settings.preferMachines) || (S.program && S.program.on));
+}
+
 function spaceOf(ex) {
   for (const t of ex.eq) if (EQ_SPACE[t]) return EQ_SPACE[t];
   return null;
@@ -589,7 +625,7 @@ function lastPerfs(exId, n) {
     const topW = weights.length ? Math.max(...weights) : null;
     const allHit = ex.targetReps ? ex.sets.every(s => (s.r || 0) >= ex.targetReps[1]) : false;
     const badMiss = ex.targetReps ? ex.sets.some(s => (s.r || 0) <= ex.targetReps[0] - 3) : false;
-    out.push({ topW, allHit, badMiss, sets: ex.sets, date: w.date });
+    out.push({ topW, allHit, badMiss, sets: ex.sets, date: w.date, program: w.program || null });
     if (out.length >= n) break;
   }
   return out;
@@ -607,6 +643,7 @@ function lastPerf(exId) { return lastPerfs(exId, 1)[0] || null; }
    never-done exercises, seeded from related lifts via a small ratio table
    (e.g. incline DB press ≈ 85% of flat DB bench). */
 function suggestFor(ex) {
+  if (ex.prog) return suggestProgram(ex);
   const perfs = lastPerfs(ex.id, 3);
   const perf = perfs[0];
   const step = incrFor(findEx(ex.id) || ex); // snapshots don't carry incr
@@ -725,6 +762,14 @@ function pickExercise(muscle, usedIds, recent, preferCompound, spaceBias) {
     // soft space balance: lean toward whichever side of the gym floor the
     // plan has fewer picks from, so there's always a free station to move to
     if (spaceBias && spaceOf(e) === spaceBias) score += 5;
+    if (machineFirst()) {
+      // racks crowd, selectorized machines sit open: machines win clearly,
+      // cables get back most of their crowding penalty, rack/barbell work
+      // still shows up when nothing else trains the muscle
+      if (e.eq.includes('machine')) score += 12;
+      else if (e.eq.includes('cable')) score += 4;
+      else if (e.eq.some(t => t === 'barbell' || t === 'rack')) score -= 4;
+    }
     if ((S.profile.goal === 'muscle' || S.profile.goal === 'strength') && !e.incr) score -= 5;
     if (S.profile.level === 'beginner' && e.lvl === 2) score -= 4;
     if (S.profile.level === 'experienced' && e.lvl === 1) score -= 1;
@@ -746,9 +791,11 @@ function snapshot(def, params) {
   };
 }
 
-function generateWorkout(groupIds, minutes) {
+function generateWorkout(groupIds, minutes, split) {
   const budget = minutes - 5; // reserve ~5 min for warm-up
-  const queue = musclesFor(groupIds);
+  // push/pull splits drop the arm muscle that belongs to the other day
+  const skip = (split && SPLITS[split] && SPLITS[split].skip) || [];
+  const queue = musclesFor(groupIds).filter(m => !skip.includes(m));
   const usedIds = new Set();
   const recent = recentExerciseAges(4);
   const picked = [];
@@ -761,7 +808,7 @@ function generateWorkout(groupIds, minutes) {
     const preferCompound = cmpCount < Math.max(3, Math.ceil((picked.length + 1) * 0.6));
     const free = picked.filter(p => spaceOf(p) === 'free').length;
     const mach = picked.filter(p => spaceOf(p) === 'machines').length;
-    const spaceBias = free === mach ? null : (free < mach ? 'free' : 'machines');
+    const spaceBias = (machineFirst() || free === mach) ? null : (free < mach ? 'free' : 'machines');
     const ex = pickExercise(muscle, usedIds, recent, preferCompound && muscle !== 'core' && muscle !== 'cardio', spaceBias);
     if (!ex) continue;
     // cardio joins a strength session as a single finisher block
@@ -778,6 +825,7 @@ function generateWorkout(groupIds, minutes) {
 
   const ctx = { total, budget, minutes, usedIds, recent };
   const topup = cardioOnly ? new Set() : topupWeeklyVolume(picked, ctx);
+  const walk = walkBlock(picked, cardioOnly, ctx);
   total = ctx.total;
 
   picked.sort((a, b) => {
@@ -788,12 +836,135 @@ function generateWorkout(groupIds, minutes) {
 
   return {
     groups: groupIds,
+    split: split || undefined,
     minutes,
     home: homeOnly || undefined,
     est: Math.round(total + 5),
-    ex: picked.map(p => snapshot(p, p)),
+    ex: picked.map(p => snapshot(p, p)).concat(walk ? [walk] : []),
+    walkMin: walk ? walk.reps[0] : undefined,
     topup: topup.size ? Array.from(topup).map(id => (UI_GROUPS.find(u => u.id === id) || { label: id }).label) : undefined,
   };
+}
+
+/* ---------------- the program ----------------
+   Open the app, press Start, do what it says. A queue rather than a calendar:
+   whatever day you show up, you do the next day in PROGRAM, so missing a
+   Tuesday never leaves you "behind". */
+function programDay() { return PROGRAM[(S.program.next || 0) % PROGRAM.length]; }
+function programGroups(day) { return SPLITS[day.id.startsWith('upper') ? 'upper' : 'lower'].groups.slice(); }
+
+function programDose(def, k) {
+  if (k === 0) return PROGRAM_DOSE.main;
+  if (def.m.includes('calves') || def.m.includes('core') || def.id === 'hip-abduction') return PROGRAM_DOSE.small;
+  return PROGRAM_DOSE.acc;
+}
+
+function buildProgramPlan(day) {
+  day = day || programDay();
+  const usedIds = new Set();
+  const ex = [];
+  day.ex.forEach((id, k) => {
+    let def = findEx(id);
+    // equipment switched off (or a missing entry): same muscle, machine-first
+    if (!def || !equipOK(def)) def = def ? pickExercise(def.m[0], new Set([...usedIds, def.id]), new Map(), k === 0) : null;
+    if (!def || usedIds.has(def.id)) return;
+    usedIds.add(def.id);
+    const d = programDose(def, k);
+    ex.push(Object.assign(snapshot(def, { sets: d.sets, reps: d.reps.slice(), rest: d.rest }), { prog: true, main: k === 0 || undefined }));
+  });
+  const ctx = { total: 0 };
+  const walk = walkBlock([], false, ctx);
+  const plan = { groups: programGroups(day), program: day.id, minutes: 45, ex: walk ? ex.concat([walk]) : ex };
+  plan.est = planEst(plan);
+  return plan;
+}
+
+function programLabel(id) { const d = PROGRAM.find(x => x.id === id); return d ? d.label : null; }
+
+/* A lift = any finished session with at least one non-cardio set. */
+function isLift(w) { return !w.rehab && (w.exercises || []).some(e => !e.cardio && !e.hiit && e.sets && e.sets.length); }
+
+/* Lifts per week, oldest → newest, the last entry being this week. */
+function liftWeeks(n) {
+  const now = weekStart(new Date());
+  const out = new Array(n).fill(0);
+  for (const w of S.history) {
+    if (!isLift(w)) continue;
+    const k = Math.round((now - weekStart(new Date(w.date))) / (7 * DAY_MS));
+    if (k >= 0 && k < n) out[n - 1 - k]++;
+  }
+  return out;
+}
+
+/* Three full weeks in a row at 3 lifts → offer a fourth day (at most every two weeks). */
+function offerFourth() {
+  const P = S.program;
+  if (P.perWeek !== 3) return false;
+  if (P.offer4At && Date.now() - P.offer4At < 14 * DAY_MS) return false;
+  const wk = liftWeeks(4);
+  return wk.slice(0, 3).every(c => c >= 3);
+}
+
+function daysSinceLift() {
+  const last = S.history.find(isLift);
+  return last ? Math.floor((Date.now() - new Date(last.date).getTime()) / DAY_MS) : null;
+}
+
+/* Program progression: double progression judged on the working weight only.
+   Ramp-up sets lighter than the top weight don't count, so a pyramid
+   (70/100/120/140) reads as "140 for one set", not "missed 12 on four sets".
+   Every working set at the top of the range → add an increment; otherwise
+   hold the weight and beat the reps. Three sessions stuck → 10% deload.
+   Four+ weeks away → ease back in at 90%. */
+function suggestProgram(ex) {
+  const def = findEx(ex.id) || ex;
+  const step = incrFor(def);
+  // the working weight is the heaviest set actually completed — a 0-rep
+  // ghost tick at a heavier weight isn't a set
+  const perfs = lastPerfs(ex.id, 3).map(p => {
+    const real = p.sets.filter(st => typeof st.w === 'number' && st.w > 0 && (st.r || 0) > 0);
+    return Object.assign({}, p, { topW: real.length ? Math.max(...real.map(st => st.w)) : null });
+  }).filter(p => p.topW);
+  const flat = w => (w ? new Array(ex.sets).fill(w) : null);
+  const failNote = '';
+  if (!perfs.length || !step) {
+    return { w: null, note: 'First time: pick a weight you can move ~10 clean reps.' + failNote, up: false };
+  }
+  const top = p => p.sets.filter(st => st.w === p.topW);
+  const hit = p => { const t = top(p); return t.length >= ex.sets && t.every(st => (st.r || 0) >= ex.reps[1]); };
+  const perf = perfs[0];
+  const reps = top(perf).map(st => st.r || '—').join(', ');
+  const lastTxt = 'Last: ' + fmtW(perf.topW) + ' ' + unitLabel() + ' × ' + reps;
+  const weeks = Math.floor((Date.now() - new Date(perf.date).getTime()) / (7 * DAY_MS));
+  if (weeks >= 4) {
+    const w = roundW(perf.topW * 0.9);
+    return { w, setW: flat(w), note: lastTxt + ' (' + weeks + ' weeks ago). Easing back in at ' + fmtW(w) + '.', up: false };
+  }
+  if (hit(perf)) {
+    const w = perf.topW + step;
+    return { w, setW: flat(w), note: lastTxt + ' — top of the range on every set. Up to ' + fmtW(w) + ' ↑', up: true };
+  }
+  // stuck only counts sessions run on the program's own sets × reps
+  if (perfs.length >= 3 && perfs.every(p => p.program && p.topW === perf.topW && !hit(p))) {
+    const w = roundW(perf.topW * 0.9);
+    return { w, setW: flat(w), note: 'Stuck at ' + fmtW(perf.topW) + ' for 3 sessions — drop to ' + fmtW(w) + ' and build back up.', up: false };
+  }
+  return { w: perf.topW, setW: flat(perf.topW), note: lastTxt + '. Same weight — beat those reps (aim ' + ex.reps[1] + ').' + failNote, up: false };
+}
+
+/* The daily incline walk rides on the end of a lift: it replaces any random
+   cardio finisher and sits outside the lifting time budget (the plan's
+   estimate says so separately). Skipped at home, on cardio-only days, and
+   once today's walk is already done. */
+const WALK_CUE = 'Zone 2: start ~10% incline at 3 mph and work toward 15%. You should be able to talk in full sentences — if you can’t, drop the incline, not the time. Hands off the rails.';
+function walkBlock(picked, cardioOnly, ctx) {
+  const ws = S.settings.walk;
+  if (!ws || !ws.on || homeOnly || cardioOnly || !S.settings.equipment.treadmill) return null;
+  if (walkMinutesOn() >= Math.round(ws.minutes * 0.8)) return null;
+  for (let i = picked.length - 1; i >= 0; i--) if (picked[i].cardio) ctx.total -= estMinutes(picked.splice(i, 1)[0]);
+  const def = findEx('incline-walk');
+  if (!def) return null;
+  return Object.assign(snapshot(def, { sets: 1, reps: [ws.minutes, ws.minutes], rest: 0 }), { cue: WALK_CUE, walk: true });
 }
 
 /* Weekly volume top-up: when the schedule is on and this is the last
@@ -854,7 +1025,9 @@ function swapExercise(i) {
     toast(plan.home ? 'No other bodyweight option for that muscle.' : 'No alternative for this muscle with your equipment.');
     return;
   }
-  const fresh = withHome(plan.home, () => snapshot(next, assignParams(next, plan.minutes || 45)));
+  const fresh = cur.prog
+    ? Object.assign(snapshot(next, { sets: cur.sets, reps: cur.reps.slice(), rest: cur.rest }), { prog: true, main: cur.main })
+    : withHome(plan.home, () => snapshot(next, assignParams(next, plan.minutes || 45)));
   if (plan === S.active) {
     fresh.log = Array.from({ length: fresh.sets }, () => ({ w: null, r: null, done: false }));
     fresh.suggest = suggestFor(fresh);
@@ -1121,7 +1294,7 @@ function startWorkout() {
   S.active = Object.assign({}, S.draft, {
     id: newWorkoutId(), startedAt: Date.now(),
     // rehab sessions carry their own "before you start" ritual
-    warmup: S.draft.rehab ? undefined : { done: false },
+    warmup: (S.draft.rehab || S.draft.program) ? undefined : { done: false },
     ex: S.draft.ex.map(e => Object.assign({}, e, {
       log: Array.from({ length: e.sets }, () => ({ w: null, r: null, done: false })),
       suggest: e.rehabEx ? rehabSuggest(e) : suggestFor(e),
@@ -1415,10 +1588,12 @@ function addToPlan(def, opts) {
 /* Rough plan length recomputed from the snapshots alone (mirrors estMinutes),
    for when the preview list is edited after generation. */
 function planEst(plan) {
-  const total = plan.ex.reduce((t, e) =>
+  const total = plan.ex.reduce((t, e) => e.walk ? t :
     t + (e.cardio ? e.sets * e.reps[0] : e.sets * (0.75 + e.rest / 60)), 0);
   return Math.round(total + 5);
 }
+
+function walkOf(plan) { return (plan.ex || []).find(e => e.walk) || null; }
 
 function removeDraftEx(i) {
   const d = S.draft;
@@ -1439,7 +1614,7 @@ function setDone(i, j) {
     if (navigator.vibrate) navigator.vibrate(10); // tactile tick
     if (s.w == null) { const sw = suggestedW(ex, j); if (sw) { s.w = sw; s.auto = true; } }
     if (s.w != null) autofillWeight(i, j); // ticking a set also settles the ones after it
-    if (s.r == null) s.r = ex.reps[1];
+    if (s.r == null) s.r = ex.reps[0]; // conservative: untyped reps never trigger a weight jump
     // rest after every tick until the whole session is done — "last set" by
     // list position breaks when exercises are done out of order (floating to
     // whichever space is free), muting rest mid-session and timing it at the end
@@ -1504,6 +1679,8 @@ function finishWorkout(force) {
     timingQuality: "recorded",
     date: endedAt,
     groups: a.groups,
+    split: a.split || undefined,
+    program: a.program || undefined,
     home: a.home || undefined,
     goal: S.profile.goal,
     minutes: minutesBetween(a.startedAt, Date.now()),
@@ -1523,7 +1700,8 @@ function finishWorkout(force) {
   S.history.unshift(entry);
   S.active = null;
   lastFinished = entry; // transient — summary/cooldown read it this launch only
-  stopRest(); stopTempo(); releaseWakeLock(); saveNow(); go('cooldown');
+  if (a.program) S.program.next = (S.program.next || 0) + 1; // the queue moves only on a finished lift
+  stopRest(); stopTempo(); releaseWakeLock(); saveNow(); go(a.program ? 'summary' : 'cooldown');
 }
 
 /* Throw away the active session entirely — even with sets already logged. */
@@ -1628,7 +1806,7 @@ setInterval(() => {
   }
   if (route === 'today' && S.active) {
     const el = $('#resume-sub');
-    if (el) el.textContent = groupLabels(S.active.groups) + ' · started ' + minutesBetween(S.active.startedAt, Date.now()) + ' min ago';
+    if (el) el.textContent = planLabel(S.active) + ' · started ' + minutesBetween(S.active.startedAt, Date.now()) + ' min ago';
   }
   hiitTick();
   testTick();
@@ -2271,6 +2449,8 @@ function bindLightboxGestures(stage) {
   stage.addEventListener('pointercancel', up);
 }
 
+document.addEventListener('toggle', ev => { if (ev.target && ev.target.id === 'more') moreOpen = ev.target.open; }, true);
+
 document.addEventListener('click', ev => {
   const b = ev.target.closest('[data-lb]');
   if (b) {
@@ -2386,7 +2566,96 @@ function viewOnboard() {
 
 /* ----- today ----- */
 
+/* The build-your-own block: muscle chips, time, build, plus the side doors. */
+function builderHTML(chips, sugLine, mins) {
+  return `
+    <section class="card">
+      <h2>Muscle groups</h2>
+      <div class="chips">${chips}</div>
+      ${sugLine}
+      <h2 class="mt">Time</h2>
+      <div class="seg" id="min-seg">${mins}</div>
+      <button class="btn-primary mt" data-a="generate" ${S.sel.groups.length ? '' : 'disabled'}>
+        ${dumbbellSVG()} Build workout
+      </button>
+    </section>
+    <button class="btn-ghost wide" data-a="home-build">${houseSVG()} At home — no equipment</button>
+    <div class="row-btns">
+      <button class="btn-ghost" data-a="freestyle">Blank session</button>
+      <button class="btn-ghost" data-a="hiit-menu">Guided HIIT</button>
+    </div>`;
+}
+
+/* Program mode's Today: one card that says what's next and a Start button,
+   the walk, and a scoreboard. Everything else lives behind "Something else". */
+function viewTodayProgram() {
+  const P = S.program;
+  const day = programDay();
+  const plan = buildProgramPlan(day);
+  const wk = liftWeeks(12);
+  const lifts = wk[wk.length - 1];
+  const doneWeek = lifts >= P.perWeek;
+  const gap = daysSinceLift();
+  const resume = S.active ? `
+    <button class="card resume" data-a="nav" data-r="workout">
+      <div><strong>Session in progress</strong>
+      <span class="muted" id="resume-sub">${esc(planLabel(S.active))} · started ${minutesBetween(S.active.startedAt, Date.now())} min ago</span></div>
+      <span class="chev">›</span>
+    </button>` : '';
+  const walk = walkOf(plan);
+  const names = plan.ex.filter(e => !e.walk).map(e => esc(e.name)).join(' · ');
+  const strip = '<div class="lift-strip" title="Lifts per week, last 12 weeks">' + wk.map((c, i) =>
+    '<span class="lw' + (c >= P.perWeek ? ' hit' : c ? ' some' : '') + (i === wk.length - 1 ? ' now' : '') + '" style="--h:' + Math.min(1, c / P.perWeek).toFixed(2) + '"></span>').join('') + '</div>';
+  const back = gap != null && gap >= 28 ? '<div class="hint">It’s been ' + Math.floor(gap / 7) + ' weeks — weights are eased ~10% today. Just show up.</div>' : '';
+  const four = offerFourth() ? `
+    <div class="hint">Three straight weeks of ${P.perWeek}. Ready for 4 a week?
+      <button data-a="prog-four">Yes</button> · <button data-a="prog-four-no">Not yet</button></div>` : '';
+  const hero = S.active ? '' : `
+    <section class="card hero">
+      <div class="kicker">${doneWeek ? lifts + ' of ' + P.perWeek + ' lifts done this week ✓' : 'Next up · lift ' + (lifts + 1) + ' of ' + P.perWeek + ' this week'}</div>
+      <h2 class="hero-title">${esc(day.label)}</h2>
+      <p class="muted small">${names}</p>
+      <p class="muted small">~${plan.est} min${walk ? ' + ' + walk.reps[0] + ' min incline walk' : ''}</p>
+      ${back}${four}
+      <button class="${doneWeek ? 'btn-ghost' : 'btn-primary'}" data-a="prog-start">${dumbbellSVG()} ${doneWeek ? 'Lift anyway' : 'Start'}</button>
+    </section>`;
+  const score = `
+    <section class="card score">
+      <div class="score-row">
+        <div><strong>${lifts}/${P.perWeek}</strong><span class="muted small">lifts this week</span></div>
+        ${S.settings.walk.on ? '<div><strong>' + walkDays(7) + '/7</strong><span class="muted small">walk days</span></div>' : ''}
+      </div>
+      ${strip}
+    </section>`;
+  const chips = UI_GROUPS.map(g =>
+    '<button class="chip' + (S.sel.groups.includes(g.id) ? ' on' : '') + '" data-a="chip" data-g="' + g.id + '">' + g.label + '</button>').join('');
+  const mins = [30, 45, 60].map(m =>
+    '<button data-v="' + m + '"' + (S.sel.minutes === m ? ' class="on"' : '') + '>' + m + ' min</button>').join('');
+  const dateLine = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  return `
+  <div class="screen">
+    <header class="top"><div><div class="kicker">${esc(dateLine)}</div>
+      <h1>${S.active ? 'Keep going' : doneWeek ? 'Week done.' : 'Today'}</h1></div></header>
+    ${resume}
+    ${hero}
+    ${walkCard()}
+    ${score}
+    ${backupBanner()}
+    ${rehabCheckCard()}
+    ${rehabCard()}
+    ${niggleCard()}
+    <details class="more" id="more"${moreOpen ? ' open' : ''}>
+      <summary>Something else</summary>
+      ${builderHTML(chips, '', mins)}
+    </details>
+  </div>
+  ${S._hiitSheet ? hiitSheetHTML() : ''}
+  ${tabbar('today')}`;
+}
+let moreOpen = false; // "Something else" stays open across re-renders (chip taps) this launch
+
 function viewToday() {
+  if (S.program && S.program.on) return viewTodayProgram();
   const p = S.profile;
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -2396,7 +2665,7 @@ function viewToday() {
   const resume = S.active ? `
     <button class="card resume" data-a="nav" data-r="workout">
       <div><strong>Session in progress</strong>
-      <span class="muted" id="resume-sub">${esc(groupLabels(S.active.groups))} · started ${minutesBetween(S.active.startedAt, Date.now())} min ago</span></div>
+      <span class="muted" id="resume-sub">${esc(planLabel(S.active))} · started ${minutesBetween(S.active.startedAt, Date.now())} min ago</span></div>
       <span class="chev">›</span>
     </button>` : '';
   const chips = UI_GROUPS.map(g =>
@@ -2418,6 +2687,7 @@ function viewToday() {
     </header>
     ${resume}
     ${scheduleBanner()}
+    ${walkCard()}
     ${backupBanner()}
     ${cycleBanner()}
     ${rehabCheckCard()}
@@ -2426,25 +2696,35 @@ function viewToday() {
     ${testDayCard()}
     ${checkinCard()}
     ${dayCard()}
-    <section class="card">
-      <h2>Muscle groups</h2>
-      <div class="chips">${chips}</div>
-      ${sugLine}
-      <h2 class="mt">Time</h2>
-      <div class="seg" id="min-seg">${mins}</div>
-      <button class="btn-primary mt" data-a="generate" ${S.sel.groups.length ? '' : 'disabled'}>
-        ${dumbbellSVG()} Build workout
-      </button>
-    </section>
-    <button class="btn-ghost wide" data-a="home-build">${houseSVG()} At home — no equipment</button>
-    <div class="row-btns">
-      <button class="btn-ghost" data-a="freestyle">Blank session</button>
-      <button class="btn-ghost" data-a="hiit-menu">Guided HIIT</button>
-    </div>
+    ${builderHTML(chips, sugLine, mins)}
     ${st.total ? '' : '<p class="fine">Pick muscle groups and a time. Spotter builds the plan from what your gym has.</p>'}
   </div>
   ${S._hiitSheet ? hiitSheetHTML() : ''}
   ${tabbar('today')}`;
+}
+
+/* The daily incline walk. Done → a quiet check line; a lift still due today
+   → it's already the plan's last block; otherwise one tap logs it. */
+function walkCard() {
+  const ws = S.settings.walk;
+  if (!ws || !ws.on || S.active) return '';
+  const done = walkMinutesOn();
+  const goal = Math.round(ws.minutes * 0.8);
+  const week = walkDays(7);
+  const weekTxt = week + ' of the last 7 days';
+  if (done >= goal) {
+    return `<section class="card walk done"><div><strong>✓ Walked ${done} min today</strong>
+      <span class="muted small">${weekTxt}</span></div>
+      <button class="btn-ghost sm" data-a="walk-undo">Undo</button></section>`;
+  }
+  const liftDue = S.program.on
+    ? liftWeeks(1)[0] < S.program.perWeek && !trainedOnDate(new Date())
+    : S.schedule.enabled && scheduleToday() && !trainedOnDate(new Date());
+  return `<section class="card walk">
+    <div><div class="kicker">Every day</div><strong>Incline walk · ${ws.minutes} min</strong>
+    <span class="muted small">${liftDue ? (S.program.on ? 'Lifting today? It’s the lift’s last block.' : 'It’s the last block of today’s lift.') : 'Zone 2 — ~12–15% incline, 3 mph, can still talk.'} ${weekTxt}.</span></div>
+    <button class="btn-primary sm" data-a="walk-done">Done ✓</button>
+  </section>`;
 }
 
 /* Water counter + one-line journal for the day. The note saves as you type
@@ -2479,6 +2759,13 @@ function hiitSheetHTML() {
       <div class="pick-list">${rows}</div>
     </div>
   </div>`;
+}
+
+/* A plan/session's title: the split's own name when it came from the
+   schedule (so a push day reads "Push", not "Chest + Shoulders + Arms"). */
+function planLabel(p) {
+  if (p && p.program && programLabel(p.program)) return programLabel(p.program);
+  return p && p.split && SPLITS[p.split] ? SPLITS[p.split].label : groupLabels(p ? p.groups : []);
 }
 
 function groupLabels(ids) {
@@ -2616,8 +2903,8 @@ function viewPreview() {
   <div class="screen">
     <header class="top">
       <button class="back" data-a="nav" data-r="today">‹</button>
-      <div><h1>${track ? esc(trackLabel(track)) : esc(groupLabels(d.groups))}</h1>
-      <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : d.home ? 'At home · no equipment' : goal.label} · about ${d.est} min · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
+      <div><h1>${track ? esc(trackLabel(track)) : esc(planLabel(d))}</h1>
+      <p class="muted small">${track ? 'Week ' + trackWeek(track) + ' · ' + phaseMeta(track).name : d.restorative ? 'Gentle & low-impact' : d.home ? 'At home · no equipment' : goal.label} · about ${d.est} min${walkOf(d) ? ' + ' + walkOf(d).reps[0] + ' min walk' : ''} · ${d.ex.length} exercise${d.ex.length === 1 ? '' : 's'}</p></div>
     </header>
     ${d.repeatOf ? '<div class="hint">Repeat of ' + esc(fmtDate(d.repeatOf)) + ' — same exercises and sets, weights refreshed from your latest numbers.</div>' : ''}
     ${d.topup && d.topup.length ? '<div class="hint">Extra sets for ' + esc(d.topup.join(' & ')) + ' — last scheduled day this week to reach ' + WEEK_SET_TARGET + ' sets.</div>' : ''}
@@ -2664,13 +2951,14 @@ function viewWorkout() {
   <div class="screen workout-screen">
     <header class="top sticky">
       <button class="back" data-a="quit">‹</button>
-      <div class="grow"><h1>${esc(groupLabels(a.groups))}${a.home ? '<span class="home-badge">at home</span>' : ''}</h1>
+      <div class="grow"><h1>${esc(planLabel(a))}${a.home ? '<span class="home-badge">at home</span>' : ''}</h1>
         <p class="muted small"><span id="elapsed">${minutesBetween(a.startedAt, Date.now())} min</span> · ${doneSets}/${totalSets} sets</p></div>
       <div class="ring" id="ring" style="--p:${totalSets ? doneSets / totalSets : 0}"><span id="ring-txt">${Math.round(100 * doneSets / Math.max(1, totalSets))}%</span></div>
     </header>
     <div class="progress"><div class="progress-fill" id="pbar" style="width:${100 * doneSets / Math.max(1, totalSets)}%"></div></div>
     ${a.rehab ? '<div class="card warm rb"><strong>Rebuild · week ' + trackWeek(trackById(a.rehab) || { startedAt: todayISO() }) + '</strong><span class="muted">Up to 5 out of 10 during is fine. Stop a set if it sharpens past that — the morning check is what counts.</span></div>'
       : freestyle && !a.ex.length ? ''
+      : a.program ? ''
       : a.warmup ? warmupRowHTML(a)
       : '<div class="card warm"><strong>Warm-up first</strong><span class="muted">' + esc(warmupFor(a.groups, a.home)) + '</span></div>'}
     ${cards}
@@ -2776,7 +3064,9 @@ function exerciseCard(e, i) {
     ${e.tempo ? '<div class="tempo-line"><span>Tempo · ' + esc(tempoText(e.tempo)) + '</span><button class="tempo-btn" data-a="tempo" data-i="' + i + '">Start guide</button></div>' : ''}
     ${sugg.note ? '<div class="sugg' + (sugg.up ? ' up' : '') + '">' + esc(sugg.note) + '</div>' : ''}
     ${e.cue ? '<p class="cue">' + esc(e.cue) + '</p>' : ''}
-    ${e.rehabEx || e.cardio || e.hiit || e.mode === 'time' || S.active.restorative ? '' : '<p class="rir-line">Take every set close to failure — about 1 rep left in the tank.</p>'}
+    ${e.rehabEx || e.cardio || e.hiit || e.mode === 'time' || S.active.restorative ? ''
+      : e.prog ? '<p class="rir-line">' + (e.main ? 'Main lift: stop each set with 1–2 good reps left.' : 'Take both sets to failure — the last rep should be a grind.') + '</p>'
+      : '<p class="rir-line">Take every set close to failure — about 1 rep left in the tank.</p>'}
     ${howtoHTML(e.id)}
     ${noteHTML(e.id)}
     ${warmupSetsHTML(e, i)}
@@ -3097,15 +3387,16 @@ function viewSummary() {
   <div class="screen center">
     <div class="kicker">${esc(fmtDate(w.date))}</div>
     <h1>Session logged.</h1>
-    <p class="muted">${esc(groupLabels(w.groups))}${ds >= 2 ? ' · 🔥 ' + ds + '-day streak' : ''}</p>
+    <p class="muted">${esc(planLabel(w))}${ds >= 2 ? ' · 🔥 ' + ds + '-day streak' : ''}</p>
     <div class="stats-row">
       <div class="stat"><strong>${w.minutes}</strong><span>minutes</span></div>
       <div class="stat"><strong>${w.setCount}</strong><span>sets</span></div>
-      <div class="stat"><strong>${w.volume ? (w.volume >= 10000 ? (w.volume / 1000).toFixed(1) + 'k' : Math.round(w.volume)) : '—'}</strong><span>${unitLabel()} lifted</span></div>
-      ${kcal ? '<div class="stat"><strong>~' + kcal + '</strong><span>kcal</span></div>' : ''}
+      ${w.program ? '' : `<div class="stat"><strong>${w.volume ? (w.volume >= 10000 ? (w.volume / 1000).toFixed(1) + 'k' : Math.round(w.volume)) : '—'}</strong><span>${unitLabel()} lifted</span></div>`}
+      ${kcal && !w.program ? '<div class="stat"><strong>~' + kcal + '</strong><span>kcal</span></div>' : ''}
     </div>
     ${w.prs && w.prs.length ? '<div class="pr-note"><strong>Personal record' + (w.prs.length > 1 ? 's' : '') + ':</strong> ' + esc(w.prs.join(' · ')) + '</div>' : ''}
     ${ups.length ? '<div class="pr-note" style="border-color:var(--line);background:var(--sunken)">Every rep target hit on ' + esc(ups.map(e => e.name).join(', ')) + ' — next session moves up.</div>' : ''}
+    ${w.program ? '<p class="muted">Next time: <strong>' + esc(programDay().label) + '</strong>' + (S.settings.walk.on && walkMinutesOn() < S.settings.walk.minutes * 0.8 ? ' · today’s walk is still open' : '') + '</p>' : ''}
     <button class="btn-primary big" data-a="nav" data-r="today">Done</button>
   </div>`;
 }
@@ -3685,7 +3976,7 @@ function viewHistory() {
     return `
     <div class="card hist${open ? ' open' : ''}"${editing ? '' : ' data-a="hist-toggle" data-i="' + i + '"'}>
       <div class="hist-row"${editing ? ' data-a="hist-toggle" data-i="' + i + '"' : ''}>
-        <div><strong>${esc(groupLabels(w.groups))}${w.home ? '<span class="home-badge">at home</span>' : ''}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
+        <div><strong>${esc(planLabel(w))}${w.home ? '<span class="home-badge">at home</span>' : ''}${w.prs && w.prs.length ? '<span class="pr-badge">PR</span>' : ''}</strong>
         <span class="muted">${fmtDate(w.date)} · ${w.minutes} min · ${w.setCount} sets${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${sessionKcal(w) ? ' · ' + kcalTxt(w) : ''}</span></div>
         <span class="chev">${open ? '⌄' : '›'}</span>
       </div>
@@ -3761,7 +4052,7 @@ function viewReview() {
   <div class="screen">
     <header class="top">
       <button class="back" data-a="nav" data-r="history">‹</button>
-      <div><div class="kicker">${esc(fmtDate(w.date))}</div><h1>${esc(groupLabels(w.groups))}</h1>
+      <div><div class="kicker">${esc(fmtDate(w.date))}</div><h1>${esc(planLabel(w))}</h1>
       <p class="muted small">${w.minutes} min · ${w.setCount} sets${w.warmupMin ? ' · warm-up ✓' : ''}${w.volume ? ' · ' + volTxt(w.volume) + ' ' + unitLabel() : ''}${kcal ? ' · ~' + kcal + ' kcal' : ''}</p></div>
     </header>
     ${w.prs && w.prs.length ? '<div class="pr-note"><strong>Personal record' + (w.prs.length > 1 ? 's' : '') + ':</strong> ' + esc(w.prs.join(' · ')) + '</div>' : ''}
@@ -4021,6 +4312,7 @@ function viewProfile() {
         </label>
       </div>
     </section>
+    ${trainingPrefs()}
     ${scheduleSettings()}
     ${cycleSettings()}
     ${rehabSettings()}
@@ -4043,6 +4335,29 @@ function viewProfile() {
     <p class="fine">Spotter · works offline · demo photos from the public-domain free-exercise-db</p>
   </div>
   ${tabbar('profile')}`;
+}
+
+function trainingPrefs() {
+  const ws = S.settings.walk;
+  const mins = [20, 30, 45].map(m =>
+    '<button data-v="' + m + '"' + (ws.minutes === m ? ' class="on"' : '') + '>' + m + ' min</button>').join('');
+  const P = S.program;
+  const per = [3, 4].map(n => '<button data-v="' + n + '"' + (P.perWeek === n ? ' class="on"' : '') + '>' + n + ' / week</button>').join('');
+  return `
+  <section class="card">
+    <h2>Training</h2>
+    <label class="switch-row"><span>Follow the program<em class="muted small"> — Upper A · Lower A · Upper B · Lower B, machines, in order</em></span>
+      <input type="checkbox" data-f="prog-on" ${P.on ? 'checked' : ''}><i></i>
+    </label>
+    ${P.on ? '<div class="seg mt" id="prog-per">' + per + '</div><p class="muted small">Next up: ' + esc(programDay().label) + ' · <button class="linkish" data-a="prog-skip">skip to the next day</button></p>' : ''}
+    <label class="switch-row"><span>Prefer machines<em class="muted small"> — racks crowd, machines sit open</em></span>
+      <input type="checkbox" data-f="pref-machines" ${S.settings.preferMachines ? 'checked' : ''}><i></i>
+    </label>
+    <label class="switch-row"><span>Daily incline walk<em class="muted small"> — after every lift, on its own otherwise</em></span>
+      <input type="checkbox" data-f="walk-on" ${ws.on ? 'checked' : ''}><i></i>
+    </label>
+    ${ws.on ? '<div class="seg mt" id="walk-min">' + mins + '</div>' : ''}
+  </section>`;
 }
 
 function scheduleSettings() {
@@ -4216,6 +4531,8 @@ document.addEventListener('click', ev => {
     seg.querySelectorAll('button').forEach(b => b.classList.remove('on'));
     segBtn.classList.add('on');
     if (seg.id === 'min-seg') { S.sel.minutes = +segBtn.dataset.v; save(); }
+    if (seg.id === 'prog-per') { S.program.perWeek = +segBtn.dataset.v; save(); }
+    if (seg.id === 'walk-min') { S.settings.walk.minutes = +segBtn.dataset.v; save(); }
     if (seg.id === 'sched-min') { S.schedule.minutes = +segBtn.dataset.v; save(); render(); }
     if (seg.id === 'ob-units') {
       const bw = $('#ob-bw');
@@ -4245,6 +4562,7 @@ document.addEventListener('click', ev => {
 
   else if (a === 'chip') {
     const g = el.dataset.g;
+    delete S.sel.split; // hand-picked groups are no longer the scheduled split
     if (g === 'full') S.sel.groups = S.sel.groups.includes('full') ? [] : ['full'];
     else {
       S.sel.groups = S.sel.groups.filter(x => x !== 'full');
@@ -4260,13 +4578,14 @@ document.addEventListener('click', ev => {
 
   else if (a === 'use-split') {
     S.sel.groups = el.dataset.g.split(',');
+    delete S.sel.split;
     save(); render();
   }
 
   else if (a === 'generate' || a === 'regen') {
     const home = a === 'regen' && S.draft && S.draft.home;
     if (!S.sel.groups.length) return;
-    S.draft = withHome(home, () => generateWorkout(S.sel.groups, S.sel.minutes));
+    S.draft = withHome(home, () => generateWorkout(S.sel.groups, S.sel.minutes, a === 'regen' ? S.sel.split : undefined));
     if (!S.draft.ex.length) {
       toast(home ? 'Nothing bodyweight-only matches those groups.' : 'Nothing matches — check equipment settings in Profile.');
       return;
@@ -4466,8 +4785,8 @@ document.addEventListener('click', ev => {
   else if (a === 'sched-build' || a === 'sched-catchup') {
     const p = a === 'sched-build' ? scheduleToday() : missedSplit();
     if (!p) return;
-    S.sel.groups = p.groups; S.sel.minutes = p.minutes;
-    S.draft = generateWorkout(p.groups, p.minutes);
+    S.sel.groups = p.groups; S.sel.minutes = p.minutes; S.sel.split = p.split;
+    S.draft = generateWorkout(p.groups, p.minutes, p.split);
     if (!S.draft.ex.length) { toast('Nothing matches — check equipment settings in Profile.'); return; }
     save(); go('preview');
   }
@@ -4513,6 +4832,21 @@ document.addEventListener('click', ev => {
   else if (a === 'set-done') setDone(+el.dataset.i, +el.dataset.j);
   else if (a === 'warmup-done') { S.active.warmup.done = !S.active.warmup.done; save(); render(); }
   else if (a === 'water-plus') { dayLogSet({ water: dayLogGet().water + 1 }); render(); }
+  else if (a === 'prog-start') {
+    if (S.active) { go('workout'); return; }
+    S.draft = buildProgramPlan();
+    if (!S.draft.ex.length) { toast('Nothing matches — check equipment settings in Profile.'); return; }
+    startWorkout();
+  }
+  else if (a === 'prog-skip') { S.program.next = (S.program.next || 0) + 1; save(); render(); }
+  else if (a === 'prog-four') { S.program.perWeek = 4; save(); toast('4 lifts a week it is.'); render(); }
+  else if (a === 'prog-four-no') { S.program.offer4At = Date.now(); save(); render(); }
+  else if (a === 'walk-done') { dayLogSet({ walk: S.settings.walk.minutes }); render(); }
+  else if (a === 'walk-undo') {
+    if (dayLogGet().walk) dayLogSet({ walk: 0 });
+    else toast('That walk was logged inside a session — edit it from History.');
+    render();
+  }
   else if (a === 'water-minus') { dayLogSet({ water: Math.max(0, dayLogGet().water - 1) }); render(); }
   else if (a === 'finish') {
     // a Rebuild session needs its during-pain score before it can be logged
@@ -4769,6 +5103,14 @@ document.addEventListener('input', ev => {
     dayLogSet({ note: el.value.trim() });
   } else if (f === 'name') {
     S.profile.name = el.value.trim(); save();
+  } else if (f === 'prog-on') {
+    S.program.on = el.checked;
+    if (el.checked) { S.settings.preferMachines = true; S.settings.walk.on = true; }
+    save(); render();
+  } else if (f === 'pref-machines') {
+    S.settings.preferMachines = el.checked; save();
+  } else if (f === 'walk-on') {
+    S.settings.walk.on = el.checked; save(); render();
   } else if (f === 'eq') {
     S.settings.equipment[el.dataset.id] = el.checked; save();
   } else if (f === 'bodyweight') {

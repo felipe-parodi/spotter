@@ -1089,4 +1089,107 @@ function rbTrack(pattern, region) {
   S.active = prevActive; S.draft = prevDraft;
 }
 
+// --- prefer machines + daily incline walk ---
+{
+  const prevHist = S.history, prevDay = S.dayLog, prevSet = JSON.parse(JSON.stringify(S.settings));
+  S.history = []; S.dayLog = {};
+  const machineShare = () => {
+    let m = 0, n = 0;
+    for (let i = 0; i < 20; i++) {
+      for (const e of generateWorkout(['chest', 'back', 'shoulders', 'legs'], 60).ex) {
+        const d = findEx(e.id); if (!d || d.cardio) continue;
+        n++; if (d.eq.includes('machine')) m++;
+      }
+    }
+    return m / n;
+  };
+  S.settings.preferMachines = false;
+  const off = machineShare();
+  S.settings.preferMachines = true;
+  const on = machineShare();
+  assert(on > 0.6 && on > off + 0.2, 'prefer machines shifts picks to machines (' + off.toFixed(2) + ' → ' + on.toFixed(2) + ')');
+  let rackPicks = 0;
+  for (let i = 0; i < 20; i++) if (['quads'].map(m => pickExercise(m, new Set(), new Map(), true))[0].eq.includes('rack')) rackPicks++;
+  assert(rackPicks === 0, 'with machines preferred, quads never go to the rack (' + rackPicks + '/20)');
+  assert(withHome(true, () => generateWorkout(['chest'], 30)).ex.every(e => findEx(e.id).eq.every(t => t === 'bodyweight')),
+    'at home still overrides the machine preference');
+
+  S.settings.walk = { on: true, minutes: 30 };
+  const p = generateWorkout(['legs'], 45);
+  const last = p.ex[p.ex.length - 1];
+  assert(last.id === 'incline-walk' && last.walk && last.reps[0] === 30, 'walk on → lift ends with a 30-min incline walk');
+  assert(p.ex.filter(e => e.cardio).length === 1, 'the walk replaces any other cardio finisher');
+  assert(p.est <= 50 && planEst(p) === p.est, 'walk sits outside the lifting estimate (' + p.est + ')');
+  assert(!generateWorkout(['cardio'], 30).ex.some(e => e.walk), 'cardio-only days do not get an extra walk');
+  dayLogSet({ walk: 30 });
+  assert(walkMinutesOn() === 30 && walkDays(7) === 1, 'one-tap walk counts toward today and the week');
+  assert(!generateWorkout(['legs'], 45).ex.some(e => e.walk), 'no walk block once today’s walk is done');
+  dayLogSet({ walk: 0 });
+  assert(!S.dayLog[localDayKey()], 'undoing the walk leaves no empty day behind');
+  S.history = [{ date: new Date().toISOString(), exercises: [{ id: 'incline-walk', sets: [{ r: 28 }] }] }];
+  assert(walkMinutesOn() === 28 && walkDays(7) === 1, 'a walk logged inside a session counts (28 ≥ 80% of 30)');
+  S.settings.walk.on = false;
+  assert(!generateWorkout(['legs'], 45).ex.some(e => e.walk), 'walk off → no walk block');
+
+  S.history = prevHist; S.dayLog = prevDay; S.settings = prevSet;
+}
+
+// --- the program: fixed machine rotation as a queue ---
+{
+  const prev = { h: S.history, d: S.dayLog, set: JSON.parse(JSON.stringify(S.settings)), prog: JSON.parse(JSON.stringify(S.program)), active: S.active, route };
+  S.history = []; S.dayLog = {}; S.active = null;
+  S.program = { on: true, perWeek: 3, next: 0, offer4At: null };
+  S.settings.walk = { on: true, minutes: 30 };
+  assert(PROGRAM.every(d => d.ex.every(id => !!findEx(id))), 'every program exercise exists in the db');
+  const plan = buildProgramPlan();
+  assert(plan.program === 'upper-a' && planLabel(plan) === 'Upper A', 'queue starts at Upper A');
+  assert(plan.ex.map(e => e.id).slice(0, 5).join() === PROGRAM[0].ex.join(), 'program day is fixed, in order');
+  assert(plan.ex[0].sets === 3 && plan.ex[0].main && plan.ex[1].sets === 2, 'main lift 3 sets, accessories 2');
+  assert(walkOf(plan) && plan.ex[plan.ex.length - 1].walk, 'program day ends with the walk');
+  assert(plan.est >= 20 && plan.est <= 40, 'program lift is ~30 min (' + plan.est + ')');
+
+  // equipment off → same-muscle substitute, still machine-first
+  S.settings.equipment.cable = false;
+  const sub = buildProgramPlan();
+  assert(!sub.ex.some(e => e.id === 'lat-pulldown') && sub.ex.length === plan.ex.length, 'cable off → pulldown substituted');
+  S.settings.equipment.cable = true;
+
+  // run it: start skips the warm-up row, finish advances the queue and skips cool-down
+  S.draft = buildProgramPlan(); startWorkout();
+  assert(!S.active.warmup, 'program session has no warm-up check-off row');
+  S.active.ex.forEach((e, i) => e.log.forEach((st, j) => { st.w = 100; st.r = 12; st.done = true; }));
+  finishWorkout(true);
+  assert(S.program.next === 1 && route === 'summary', 'finishing advances the queue and goes straight to summary');
+  assert(S.history[0].program === 'upper-a' && planLabel(S.history[0]) === 'Upper A', 'history entry tagged with the program day');
+  assert(programDay().id === 'lower-a', 'next up is Lower A');
+  assert(liftWeeks(1)[0] === 1, 'lift counted this week');
+
+  // progression: top-of-range on every working set → +increment, flat across sets
+  const chest = Object.assign({}, buildProgramPlan(PROGRAM[0]).ex[1]); // machine-row, 2 × 8–12
+  const sg = suggestProgram(chest);
+  assert(sg.w === 105 && sg.setW.every(w => w === 105) && sg.up, 'all sets at 12 → +5, flat (' + sg.w + ')');
+  // a pyramid judges only the working weight
+  S.history[0].exercises.find(e => e.id === 'machine-row').sets = [{ w: 70, r: 12 }, { w: 100, r: 10 }, { w: 120, r: 9 }, { w: 140, r: 8 }];
+  const py = suggestProgram(chest);
+  assert(py.w === 140 && !py.up && py.setW.length === 2, 'pyramid → hold the top weight for both working sets (' + py.w + ')');
+  // untyped reps log the bottom of the range
+  S.draft = buildProgramPlan(); startWorkout();
+  S.active.ex[0].log[0].w = 50; setDone(0, 0);
+  assert(S.active.ex[0].log[0].r === S.active.ex[0].reps[0], 'ticking without reps logs the bottom of the range');
+  discardSession();
+  assert(S.program.next === 1, 'discarding does not advance the queue');
+
+  // earn the 4th day: three full weeks at 3
+  const wkAgo = n => new Date(weekStart(new Date()) - n * 7 * DAY_MS + DAY_MS).toISOString();
+  const lift = d => ({ date: d, exercises: [{ id: 'leg-press', sets: [{ w: 100, r: 10 }] }] });
+  S.history = [1, 2, 3].flatMap(n => [lift(wkAgo(n)), lift(wkAgo(n)), lift(wkAgo(n))]);
+  assert(offerFourth(), 'three straight weeks of 3 → offer a fourth day');
+  S.program.offer4At = Date.now();
+  assert(!offerFourth(), '"not yet" snoozes the offer');
+  S.history = [lift(wkAgo(6))];
+  assert(daysSinceLift() >= 35, 'layoff measured from last lift');
+
+  S.history = prev.h; S.dayLog = prev.d; S.settings = prev.set; S.program = prev.prog; S.active = prev.active; route = prev.route;
+}
+
 console.log(process.exitCode ? '--- FAILURES ---' : '--- ALL PASSED ---');

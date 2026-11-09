@@ -84,6 +84,13 @@ MAPPING = {
     'machine-curl': 'Machine Bicep Curl',
     'machine-triceps-press': 'Dip Machine',
     'leg-press': 'Leg Press',
+    'machine-incline-press': 'Leverage Incline Chest Press',
+    'hack-squat': 'Hack Squat',
+    'lying-leg-curl': 'Lying Leg Curls',
+    'seated-calf': 'Seated Calf Raise',
+    'hip-abduction': 'Thigh Abductor',
+    'back-extension': 'Hyperextensions (Back Extensions)',
+    'ab-crunch-machine': 'Ab Crunch Machine',
     'leg-extension': 'Leg Extensions',
     'seated-leg-curl': 'Seated Leg Curl',
     # cardio

@@ -102,6 +102,9 @@ const EXERCISES = [
   { id: 'machine-chest-press', name: 'Machine Chest Press', m: ['chest'], m2: ['triceps', 'shoulders'],
     eq: ['machine'], lvl: 1, cmp: true, incr: 5,
     cue: 'Adjust the seat so the handles sit at mid-chest. Press until your arms are straight, then let the stack pull back slowly — no clanking.' },
+  { id: 'machine-incline-press', name: 'Incline Machine Press', m: ['chest'], m2: ['shoulders', 'triceps'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 5,
+    cue: 'Seat low enough that the handles start at upper chest. Press up and in, then lower slowly until you feel the stretch across your chest.' },
   { id: 'pec-deck', name: 'Pec Deck Fly', m: ['chest'], m2: [],
     eq: ['machine'], lvl: 1, cmp: false, incr: 5,
     cue: 'Forearms on the pads, elbows soft. Sweep them together until they nearly touch, squeeze, then open until you feel a stretch across your chest.' },
@@ -250,6 +253,9 @@ const EXERCISES = [
   { id: 'leg-press', name: 'Leg Press', m: ['quads'], m2: ['glutes', 'hamstrings'],
     eq: ['machine'], lvl: 1, cmp: true, incr: 10,
     cue: 'Feet shoulder-width on the platform. Lower until your knees near your chest without your lower back curling off the pad, then press — don’t slam the lockout.' },
+  { id: 'hack-squat', name: 'Hack Squat', m: ['quads'], m2: ['glutes'],
+    eq: ['machine'], lvl: 1, cmp: true, incr: 10,
+    cue: 'Back flat on the pad, feet mid-platform. Sit down until your thighs pass parallel, then drive up through your whole foot without locking out hard.' },
   { id: 'leg-extension', name: 'Leg Extension', m: ['quads'], m2: [],
     eq: ['machine'], lvl: 1, cmp: false, incr: 5,
     cue: 'Pad on your shins, extend until your legs are straight, pause a beat at the top, lower slowly. Pure quads.' },
@@ -282,6 +288,9 @@ const EXERCISES = [
   { id: 'seated-leg-curl', name: 'Seated Leg Curl', m: ['hamstrings'], m2: [],
     eq: ['machine'], lvl: 1, cmp: false, incr: 5,
     cue: 'Thigh pad snug, curl your heels under the seat as far as they’ll go, then resist the weight all the way back up.' },
+  { id: 'lying-leg-curl', name: 'Lying Leg Curl', m: ['hamstrings'], m2: ['calves'],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Hips pressed into the pad the whole time. Curl the pad toward your glutes, pause, and lower for a slow three count.' },
   { id: 'sl-rdl', name: 'Single-Leg Dumbbell RDL', m: ['hamstrings'], m2: ['glutes', 'core'],
     eq: ['dumbbell'], lvl: 2, cmp: true, uni: true, incr: 5,
     cue: 'Balance on one leg, hinge forward as the other leg floats back. Wobbling is normal — it’s the point.' },
@@ -331,6 +340,15 @@ const EXERCISES = [
   { id: 'calf-raise', name: 'Standing Dumbbell Calf Raise', m: ['calves'], m2: [],
     eq: ['dumbbell'], lvl: 1, cmp: false, incr: 5,
     cue: 'Ball of your foot on a step or plate, rise as high as you can, pause, lower for a deep stretch.' },
+  { id: 'seated-calf', name: 'Seated Calf Raise', m: ['calves'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 10,
+    cue: 'Pad snug on your lower thighs. Drop your heels all the way down, pause in the stretch, then rise as high as you can.' },
+  { id: 'hip-abduction', name: 'Hip Abduction Machine', m: ['glutes'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 10,
+    cue: 'Sit tall, or lean slightly forward to bias the glutes. Push your knees out against the pads, pause, and let them come back slowly.' },
+  { id: 'back-extension', name: 'Back Extension', m: ['glutes'], m2: ['hamstrings', 'back'],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Pad just below your hip crease. Hinge down with a flat back, then squeeze your glutes to come up to a straight line — not past it. Hug a plate to add load.' },
   { id: 'bw-calf-raise', name: 'Standing Calf Raise', m: ['calves'], m2: [],
     eq: ['bodyweight'], lvl: 1, cmp: false, incr: 0,
     cue: 'Balls of your feet on a stair edge, heels hanging. Rise as high as you can, pause a beat, sink into a deep stretch.' },
@@ -354,6 +372,9 @@ const EXERCISES = [
   { id: 'cable-crunch', name: 'Cable Crunch', m: ['core'], m2: [],
     eq: ['cable'], lvl: 2, cmp: false, incr: 5,
     cue: 'Kneel facing the machine, rope beside your head, crunch your ribs toward your hips. Hips stay still.' },
+  { id: 'ab-crunch-machine', name: 'Ab Crunch Machine', m: ['core'], m2: [],
+    eq: ['machine'], lvl: 1, cmp: false, incr: 5,
+    cue: 'Curl your ribs toward your hips — the movement is in your spine, not your arms. Exhale hard at the bottom and come back up slowly.' },
   { id: 'woodchop', name: 'Cable Woodchopper', m: ['core'], m2: ['shoulders'],
     eq: ['cable'], lvl: 2, cmp: false, uni: true, incr: 5,
     cue: 'Pull the handle diagonally across your body, high to low, rotating through your torso. Arms stay long.' },
@@ -506,10 +527,29 @@ const SPLITS = {
   full:   { label: 'Full body',     groups: ['full'] },
   upper:  { label: 'Upper body',    groups: ['chest', 'back', 'shoulders', 'arms'] },
   lower:  { label: 'Legs & glutes', groups: ['legs', 'glutes', 'core'] },
-  push:   { label: 'Push',          groups: ['chest', 'shoulders', 'arms'] },
-  pull:   { label: 'Pull',          groups: ['back', 'arms', 'core'] },
+  // push days press (triceps only), pull days pull (biceps only)
+  push:   { label: 'Push',          groups: ['chest', 'shoulders', 'arms'], skip: ['biceps'] },
+  pull:   { label: 'Pull',          groups: ['back', 'arms', 'core'], skip: ['triceps'] },
   legs:   { label: 'Legs',          groups: ['legs', 'glutes'] },
   cardio: { label: 'Cardio',        groups: ['cardio'] },
+};
+
+/* The program: a fixed machine-first upper/lower rotation, run as a queue
+   (whatever day you show up, you do the next one). The first lift of each
+   day is the main lift: 3 working sets in a lower rep range. Everything else
+   is 2 hard sets taken to (near) failure. Same exercises every time so the
+   weights can actually climb. Any exercise whose equipment is switched off
+   is substituted at build time. */
+const PROGRAM = [
+  { id: 'upper-a', label: 'Upper A', ex: ['machine-chest-press', 'machine-row', 'machine-shoulder-press', 'lat-pulldown', 'machine-curl'] },
+  { id: 'lower-a', label: 'Lower A', ex: ['leg-press', 'seated-leg-curl', 'leg-extension', 'seated-calf', 'ab-crunch-machine'] },
+  { id: 'upper-b', label: 'Upper B', ex: ['machine-incline-press', 'cable-row', 'pec-deck', 'machine-rear-fly', 'machine-triceps-press'] },
+  { id: 'lower-b', label: 'Lower B', ex: ['hack-squat', 'lying-leg-curl', 'back-extension', 'hip-abduction', 'seated-calf'] },
+];
+const PROGRAM_DOSE = {
+  main: { sets: 3, reps: [6, 10], rest: 120 },
+  acc:  { sets: 2, reps: [8, 12], rest: 90 },
+  small: { sets: 2, reps: [10, 15], rest: 60 }, // calves, abs, abduction
 };
 
 /* strength-split template by training days per week; '3adj' is used when
