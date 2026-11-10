@@ -2,7 +2,9 @@
 /* Optional personal backup. No credentials or data are sent until this device
    is explicitly paired. Pairing lives separately from exported workout data. */
 (() => {
-  const endpoint = 'https://pipepc.tail1c3fb6.ts.net:8448';
+  // The archive's address arrives in the pairing link (#health-pair=CODE&server=ORIGIN) and lives only in
+  // this device's localStorage, so this public file never names the private host. Tailnet HTTPS only.
+  const okServer = s => { try { const u = new URL(s); return u.protocol === 'https:' && u.hostname.endsWith('.ts.net') && u.origin === s; } catch (_) { return false; } };
   const key = 'spotter-health-sync-v1';
   let config = null, timer = null, busy = false, getState, replaceState;
   let message = 'Not connected';
@@ -15,8 +17,9 @@
     message = text;
     document.querySelectorAll('[data-sync-status]').forEach(el => { el.textContent = text; });
   }
-  async function request(path, body) {
-    const response = await fetch(endpoint + path, {
+  async function request(path, body, server = config?.server) {
+    if (!okServer(server)) { const error = new Error('Reconnect backup'); error.status = 401; throw error; }
+    const response = await fetch(server + path, {
       method: body ? 'POST' : 'GET', cache: 'no-store', credentials: 'omit',
       headers: {'Content-Type': 'application/json', ...(config?.token ? {Authorization: 'Bearer ' + config.token} : {})},
       body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000),
@@ -68,13 +71,14 @@
   }
   async function pair(value) {
     if (busy) { alert('Wait for the current sync to finish.'); return; }
-    const code = value.includes('health-pair=') ? value.split('health-pair=')[1].split('&')[0] : value.trim();
-    if (!code) return;
+    const params = new URLSearchParams(value.includes('#') ? value.split('#')[1] : value.includes('health-pair=') ? value : '');
+    const code = params.get('health-pair'), server = params.get('server');
+    if (!code || !okServer(server)) { alert('Paste the whole pairing link from your private Training page.'); return; }
     if (!getState()?.profile) { alert('Set up or import your Spotter profile before connecting backup.'); return; }
     if (!confirm('Connect this Spotter profile to your private health archive? Your phone’s current data will be backed up.')) return;
     try {
-      const result = await request('/api/pair/redeem',{code});
-      config = {...result, bootstrap:true, ack:null, pending:null};
+      const result = await request('/api/pair/redeem',{code},server);
+      config = {...result, server, bootstrap:true, ack:null, pending:null};
       persist();
       rerender();
       await sync();
@@ -110,15 +114,15 @@
     },
     init(getter, setter) {
       getState = getter; replaceState = setter;
-      status(config?.conflict ? 'Different server copy · review before syncing' : config?.token ? 'Checking backup…' : 'Not connected');
-      const match = location.hash.match(/^#health-pair=(.+)$/);
-      if (match) { history.replaceState(null,'',location.pathname+location.search); pair(match[1]); }
+      status(config?.token && !okServer(config.server) ? 'Backup moved · tap Reconnect with a new pairing link'
+        : config?.conflict ? 'Different server copy · review before syncing' : config?.token ? 'Checking backup…' : 'Not connected');
+      if (location.hash.startsWith('#health-pair=')) { const link = location.hash; history.replaceState(null,'',location.pathname+location.search); pair(link); }
       schedule(500);
     },
   };
   document.addEventListener('click', event => {
     const action = event.target.closest('[data-health-sync]')?.dataset.healthSync;
-    if (action === 'pair') { const value = prompt('Paste the pairing link or code from your private Training page:'); if (value) pair(value); }
+    if (action === 'pair') { const value = prompt('Paste the pairing link from your private Training page:'); if (value) pair(value); }
     if (action === 'sync') {
       if (config?.conflict) status('Different server copy · tap “Load server copy” to reconcile');
       else if (busy) status('Syncing…');

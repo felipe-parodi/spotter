@@ -14,7 +14,7 @@ async function overview(){return (await fetch(api+'/api/overview')).json();}
  const context=await browser.newContext({viewport:{width:390,height:844}});
  await context.addInitScript(data=>{if(!localStorage.getItem('spotter-v1'))localStorage.setItem('spotter-v1',JSON.stringify(data));},backup);
  let offline=false,dropAck=false,deliveredRevision;
- await context.route('https://pipepc.tail1c3fb6.ts.net:8448/**',async route=>{
+ await context.route(url=>url.hostname.endsWith('.ts.net'),async route=>{
   if(offline)return route.abort();
   const req=route.request();
   const response=await route.fetch({url:api+new URL(req.url()).pathname,headers:{...req.headers(),Origin:'https://felipe-parodi.github.io'}});
